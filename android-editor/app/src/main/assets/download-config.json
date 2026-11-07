@@ -1,0 +1,8 @@
+{
+  "connectTimeoutMs": 15000,
+  "readTimeoutMs": 30000,
+  "maxRetries": 3,
+  "backoffBaseMs": 1000,
+  "userAgent": "microui-toolchain/0.1",
+  "notes": "连接/读取超时分开；每源最多重试 3 次，退避 1s/2s/4s，耗尽后自动切下一个源。镜像地址不写在这里，放在 manifest 的 urls 字段。"
+}

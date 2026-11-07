@@ -1,0 +1,69 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.microui.zigeditor'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.microui.zigeditor'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'   // x86_64 供雷电等模拟器跑原生 proot
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    // proot 必须能从 nativeLibraryDir 直接 execve（Android 10+ 仅 APK 内嵌库可执行），
+    // 因此关闭「从 APK 内直接加载」的默认压缩策略，让安装时把 .so 解到 nativeLibraryDir。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+// 包索引唯一权威源：android-toolchain/packages/manifest.json。
+// 构建时复制进 APK 的 assets/packages-manifest.json，避免两份手写副本漂移
+// （历史上曾出现一份 sha256 是占位符、另一份是真实值，导致端上校验行为不同）。
+def pkgManifest = rootProject.file('../android-toolchain/packages/manifest.json')
+def genAssetsDir = layout.buildDirectory.dir('generated/packagesAssets')
+
+tasks.register('syncPackagesManifest', Copy) {
+    from pkgManifest
+    into genAssetsDir
+    rename { 'packages-manifest.json' }
+    doFirst {
+        if (!pkgManifest.isFile()) throw new GradleException('缺少包索引: ' + pkgManifest)
+    }
+}
+android.sourceSets.main.assets.srcDirs += genAssetsDir.get().asFile
+tasks.named('preBuild').configure { dependsOn 'syncPackagesManifest' }
+
+dependencies {
+    // 端上工具链：包管理 / proot / apksig 重打包
+    implementation project(':android-toolchain')
+
+    // 固定 0.24.4：0.24.7 起 AAR 元数据要求 compileSdk 37
+    implementation 'io.github.rosemoe:editor:0.24.4'
+    implementation 'io.github.rosemoe:language-textmate:0.24.4'
+    implementation 'io.github.rosemoe:oniguruma-native:0.24.4'
+
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+}

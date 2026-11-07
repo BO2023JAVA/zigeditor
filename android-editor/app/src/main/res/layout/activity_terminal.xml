@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#101014">
+
+    <TextView
+        android:id="@+id/terminal_env"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
+        android:textColor="#8ab4f8"
+        android:textSize="12sp"
+        android:text="检查 proot / rootfs / zig ..." />
+
+    <!-- 终端屏幕：输出与命令输入在同一块文本里，类似 Termux，不再是分离的输入框 -->
+    <EditText
+        android:id="@+id/terminal_screen"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#101014"
+        android:cursorVisible="true"
+        android:fontFamily="monospace"
+        android:gravity="top|start"
+        android:hint=""
+        android:imeOptions="actionSend"
+        android:inputType="textNoSuggestions|textMultiLine"
+        android:padding="8dp"
+        android:scrollbars="vertical"
+        android:textColor="#e6e6e6"
+        android:textCursorDrawable="@null"
+        android:textSize="12sp" />
+
+    <!-- 终端辅助键栏：Tab、方向键、Ctrl（对准输入行做编辑/历史翻找），最右是包管理 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#18181C"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_tab"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="Tab"
+                android:textAllCaps="false"
+                android:textColor="#E6E6E6" />
+
+            <Button
+                android:id="@+id/btn_up"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="↑"
+                android:textColor="#E6E6E6" />
+
+            <Button
+                android:id="@+id/btn_down"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="↓"
+                android:textColor="#E6E6E6" />
+
+            <Button
+                android:id="@+id/btn_left"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="←"
+                android:textColor="#E6E6E6" />
+
+            <Button
+                android:id="@+id/btn_right"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="48dp"
+                android:text="→"
+                android:textColor="#E6E6E6" />
+
+            <Button
+                android:id="@+id/btn_ctrl"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="56dp"
+                android:text="Ctrl"
+                android:textAllCaps="false"
+                android:textColor="#8AB4F8" />
+
+            <Button
+                android:id="@+id/btn_pkgs"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="72dp"
+                android:text="包管理"
+                android:textAllCaps="false"
+                android:textColor="#B5CEA8" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+</LinearLayout>

@@ -1,0 +1,10 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+    plugins {
+        // 独立构建时提供版本；被 android-editor 以 include 方式复用时，
+        // 由 android-editor 根 build.gradle 的 AGP 版本提供，这里不再声明版本。
+        id 'com.android.library' version '8.7.3'
+    }
+}
+dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+rootProject.name = 'android-toolchain'

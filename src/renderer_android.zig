@@ -1,6 +1,6 @@
-//! microui 的 Android 渲染后端（SDL3 + SDL_ttf，手写绑定）
+//! microui 的安卓端渲染后端（SDL3 + SDL_ttf，手写绑定）
 //!
-//! 与桌面版 renderer.zig 的职责相同，替换掉 Windows GDI 字形方案：
+//! 桌面渲染后端（renderer.zig，SDL3 + Windows GDI）已随桌面端一起移除：
 //! - ASCII 走内置图集（atlas.zig）；
 //! - 中文等 Unicode 字符用 SDL_ttf（FreeType）从内嵌字体栅格化到 512x512 动态纹理。
 //!
@@ -22,6 +22,9 @@ var renderer: *sdl.SDL_Renderer = undefined;
 var atlas_tex: *sdl.SDL_Texture = undefined;
 var font: ?*sdl.TTF_Font = null;
 
+/// 逻辑分辨率（UI 坐标系）：默认 800×600，init 时按屏幕比例算出逻辑高
+var logical_size: [2]c_int = .{ 800, 600 };
+
 // ===================== 动态中文字集（SDL_ttf 栅格化） =====================
 
 const cjk_cell = 18; // 每个中文字形网格 18x18
@@ -37,7 +40,7 @@ var glyph_tex: *sdl.SDL_Texture = undefined;
 var glyph_map: [cjk_cell_total]Glyph = undefined;
 var glyph_map_len: usize = 0;
 var glyph_cursor: usize = 0;
-var glyph_zero: [cjk_tex_w * cjk_tex_h * 4]u8 = [_]u8{0} ** (cjk_tex_w * cjk_tex_h * 4);
+var glyph_zero: [cjk_tex_w * cjk_tex_h * 4]u8 = @splat(0);
 
 /// 取码点对应的字形网格；缺失时用 SDL_ttf 栅格化并缓存。返回 null 表示失败（占位跳过）
 fn glyphCell(cp: u32) ?Glyph {
@@ -68,7 +71,7 @@ fn glyphCell(cp: u32) ?Glyph {
 
     const dst_x = @divTrunc(cjk_cell - @as(i32, surf.w), 2);
     const dst_y = cjk_cell - @as(i32, surf.h);
-    var pixels = [_]u8{0} ** (cjk_cell * cjk_cell * 4);
+    var pixels: [cjk_cell * cjk_cell * 4]u8 = @splat(0);
     const src: [*]const u8 = @ptrCast(surf.pixels);
     var yy: i32 = 0;
     while (yy < surf.h) : (yy += 1) {
@@ -156,19 +159,32 @@ fn diagLog(comptime fmt: []const u8, args: anytype) void {
 
 /// 初始化后端：SDL + 窗口 + 渲染器 + 图集 + SDL_ttf 字体 + 动态字形纹理。
 /// 在 Android 上由 SDLActivity 先初始化 SDL 环境，SDL_main 内直接创建窗口。
-pub fn init() void {
+pub fn init(title: [:0]const u8, _: c_int, _: c_int) void {
     if (!sdl.init(sdl.SDL_INIT_VIDEO)) {
         fail("SDL_Init failed: {s}", .{sdlErr()});
     }
+    // 强制显示屏幕键盘：模拟器/真机存在物理键盘时 SDL 默认不弹 IME
+    //（AutoShowingScreenKeyboard 只在无实体键盘或显式开启时返回 true）
+    _ = sdl.setHint("SDL_ENABLE_SCREEN_KEYBOARD", "1");
 
     // 尺寸传 0：Android 上窗口由系统表面决定（全屏）
     var win: ?*sdl.SDL_Window = null;
     var rr: ?*sdl.SDL_Renderer = null;
-    if (!sdl.createWindowAndRenderer("microui", 0, 0, 0, &win, &rr)) {
+    if (!sdl.createWindowAndRenderer(title.ptr, 0, 0, 0, &win, &rr)) {
         fail("SDL_CreateWindowAndRenderer failed: {s}", .{sdlErr()});
     }
     window = win.?;
     renderer = rr.?;
+    // 逻辑分辨率：UI 按逻辑坐标布局，交给 SDL 整屏拉伸（STRETCH），
+    // 尺寸全部变大、不变形、无黑边；代价是整屏放大后文字略糊（可读，可接受）。
+    var pw: c_int = 0;
+    var ph: c_int = 0;
+    _ = sdl.getWindowSize(window, &pw, &ph);
+    // 逻辑宽基准：横屏 800（与桌面一致）；竖屏降到 480，保证放大倍数不至过小、字不偏小
+    const lw: c_int = if (pw < ph) 480 else 800;
+    const lh: c_int = @intFromFloat(@as(f32, @floatFromInt(ph)) * @as(f32, @floatFromInt(lw)) / @as(f32, @floatFromInt(pw)));
+    logical_size = .{ lw, lh };
+    _ = sdl.setRenderLogicalPresentation(renderer, lw, lh, sdl.SDL_LOGICAL_PRESENTATION_STRETCH);
     // 开启文本输入：Android 上会唤起系统输入法（IME），输入框才能打字
     _ = sdl.startTextInput(window);
 
@@ -231,7 +247,7 @@ pub fn end() void {
     _ = sdl.renderPresent(renderer);
 }
 
-/// 当前窗口像素尺寸（触摸归一化坐标换算用）
+/// 当前窗口像素尺寸（物理屏幕，诊断用）
 pub fn windowSize() [2]c_int {
     var w: c_int = 0;
     var h: c_int = 0;
@@ -239,10 +255,110 @@ pub fn windowSize() [2]c_int {
     return .{ w, h };
 }
 
-/// 确保文本输入已开启。Android 上 init 时调用可能因窗口尚未聚焦而失效，
-/// 每帧兜底调用一次（SDL 内部幂等：text_input_active 已激活则不再弹输入法）
+/// 逻辑分辨率（UI 坐标系尺寸；触摸归一化坐标换算用）
+pub fn logicalSize() [2]c_int {
+    return logical_size;
+}
+
+/// 当前手指跟踪：只认第一个按下的手指，后续手指（误触/多指）忽略
+var active_finger: ?u64 = null;
+
+/// 触摸归一化坐标 → 逻辑像素坐标（与渲染坐标系一致）
+fn fingerToPixels(x: f32, y: f32) struct { ix: i32, iy: i32 } {
+    const sz = logical_size;
+    return .{
+        .ix = @intFromFloat(x * @as(f32, @floatFromInt(sz[0]))),
+        .iy = @intFromFloat(y * @as(f32, @floatFromInt(sz[1]))),
+    };
+}
+
+/// 轮询本帧全部 SDL 事件并驱动 microui 输入；返回 true 表示请求退出。
+/// 触摸映射为鼠标左键，IME 文本进 inputText，物理键盘可打印字符直通。
+pub fn poll(ctx: *microui.Context) bool {
+    var e: sdl.SDL_Event = undefined;
+    while (sdl.pollEvent(&e)) {
+        switch (e.type) {
+            sdl.SDL_EVENT_QUIT => return true,
+            sdl.SDL_EVENT_FINGER_DOWN => {
+                // 无条件接管跟踪：模拟器/设备可能丢失 UP 或 finger_id 不稳定
+                active_finger = e.finger.finger_id;
+                const p = fingerToPixels(e.finger.x, e.finger.y);
+                ctx.inputMouseDown(p.ix, p.iy, microui.mouse_left);
+            },
+            sdl.SDL_EVENT_FINGER_MOTION => {
+                const f = active_finger orelse continue;
+                if (f != e.finger.finger_id) continue;
+                const p = fingerToPixels(e.finger.x, e.finger.y);
+                ctx.inputMouseMove(p.ix, p.iy);
+            },
+            sdl.SDL_EVENT_FINGER_UP => {
+                if (active_finger == null) continue;
+                active_finger = null;
+                const p = fingerToPixels(e.finger.x, e.finger.y);
+                ctx.inputMouseUp(p.ix, p.iy, microui.mouse_left);
+            },
+            sdl.SDL_EVENT_TEXT_INPUT => {
+                const s = std.mem.span(e.text.text orelse continue);
+                // 临时诊断：确认粘贴/输入法提交的字符是否完整达到（中文字节是否丢失）
+                var dbg: [192]u8 = undefined;
+                const d = std.fmt.bufPrint(&dbg, "TI len={d} hex={x}", .{ s.len, s[0..@min(s.len, 24)] }) catch "";
+                sdl.logMsg(d);
+                ctx.inputText(s);
+            },
+            sdl.SDL_EVENT_KEY_DOWN, sdl.SDL_EVENT_KEY_UP => {
+                if (e.key.key == sdl.SDLK_RETURN) {
+                    if (e.type == sdl.SDL_EVENT_KEY_DOWN) ctx.inputKeyDown(microui.key_return);
+                } else if (e.key.key == sdl.SDLK_BACKSPACE) {
+                    if (e.type == sdl.SDL_EVENT_KEY_DOWN) ctx.inputKeyDown(microui.key_backspace);
+                } else if (e.key.key >= 32 and e.key.key < 0x7F and e.type == sdl.SDL_EVENT_KEY_DOWN) {
+                    // 可打印字符直接当文本输入：模拟器/外接键盘直通，不依赖系统 IME
+                    var ch: [2]u8 = .{ @intCast(e.key.key), 0 };
+                    ctx.inputText(ch[0..1]);
+                } else if (e.key.key == 9 and e.type == sdl.SDL_EVENT_KEY_DOWN) {
+                    // Tab 键：push 一个 TEXT_INPUT 事件，模拟 IME 提交中文（验证用）
+                    var tev = sdl.SDL_Event{ .text = .{
+                        .type = sdl.SDL_EVENT_TEXT_INPUT,
+                        .reserved = 0,
+                        .timestamp = 0,
+                        .window_id = 0,
+                        .text = "中文测试",
+                    } };
+                    _ = sdl.pushEvent(&tev);
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// 帧末钩子：保持文本输入激活（SDL3 的 SDL_SendKeyboardText 只在
+/// text_input_active 为真才派发 TEXT_INPUT，否则 IME 提交的中文被丢弃）。
+/// 窗口 softInputMode 已配 stateHidden，不会导致启动就弹键盘。
+pub fn frameEnd() void {
+    _ = sdl.startTextInput(window);
+}
+
+/// 确保文本输入激活（SDL_SendKeyboardText 依赖 text_input_active 才发 TEXT_INPUT）。
+/// 幂等：active 已置位后内部不再重复动作；窗口配了 stateHidden 不会弹键盘。
 pub fn ensureTextInput() void {
     _ = sdl.startTextInput(window);
+}
+
+/// textbox 聚焦回调：拉起系统 IME 并设置输入框矩形。
+/// SDL3 Android 上 StartTextInput 配合 SDL_ENABLE_SCREEN_KEYBOARD hint 才会弹键盘；
+/// 坐标是逻辑坐标（与渲染一致），SDL 用它定位输入法候选窗。
+/// 注意：focus 保持期间 textboxRaw 每帧都调本回调，若每次都 requestFocus+showSoftInput，
+/// 前一次的 IME 动画会被后一次取消（logcat 可见 onCancelled）。故按坐标变化防抖。
+var last_ime_rect: [4]i32 = .{ 0, 0, 0, 0 };
+var last_ime_valid = false;
+pub fn setTextInputArea(_: *microui.Context, x: i32, y: i32, w: i32, h: i32) void {
+    if (last_ime_valid and last_ime_rect[0] == x and last_ime_rect[1] == y and last_ime_rect[2] == w and last_ime_rect[3] == h) return;
+    last_ime_rect = .{ x, y, w, h };
+    last_ime_valid = true;
+    _ = sdl.startTextInput(window);
+    const r = sdl.SDL_Rect{ .x = x, .y = y, .w = w, .h = h };
+    _ = sdl.setTextInputArea(window, &r, 0);
 }
 
 /// 设置裁剪区域（库用超大矩形表示"不裁剪"，此时直接关闭 SDL 裁剪）

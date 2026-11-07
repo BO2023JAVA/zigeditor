@@ -1,0 +1,37 @@
+plugins { id 'com.android.library' }
+
+// 端上工具链 PoC：
+//  - 包管理器（按需下载/校验/解包/卸载，纯 Java 可在主机单测）
+//  - 模板 APK 重打包 + apksig 签名 + PackageInstaller 安装
+//  - proot 执行器（Ubuntu rootfs 内跑 zig）
+// 独立可构建：在 android-toolchain/ 下执行 gradlew test 即可（JVM 单测，无需设备）。
+android {
+    namespace 'com.microui.toolchain'
+    compileSdk 35
+    // 24 以对齐 android-editor（其已开启 coreLibraryDesugaring）；
+    // apksig 签名/校验建议 API 26+，调用方按 Build.VERSION.SDK_INT 做运行时降级提示。
+    defaultConfig { minSdk 24 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+        unitTests.all {
+            // 真实 rootfs 解包测试需要注入路径：-ProotfsTgz=<tar.gz>
+            if (project.hasProperty('rootfsTgz')) systemProperty 'rootfs.tgz', project.rootfsTgz
+            if (project.hasProperty('rootfsPkg')) systemProperty 'rootfs.pkg', project.rootfsPkg
+            // 真实 zig .tar.xz 解包基准：-PzigXz=<path>
+            if (project.hasProperty('zigXz')) systemProperty 'zig.xz', project.zigXz
+        }
+    }
+}
+dependencies {
+    api 'com.android.tools.build:apksig:8.7.3'
+    // 纯 Java 的 xz 解码（公共领域，无 native 依赖）：用于 zig-toolchain 的 tar.xz 流式解包。
+    // 体积约 120 KB，直接打进 APK；比另做 tar.gz 重打包更省端上流量。
+    implementation 'org.tukaani:xz:1.10'
+    testImplementation 'junit:junit:4.13.2'
+    // 主机单测需要 org.json（Android 运行时由系统提供）
+    testImplementation 'org.json:json:20240303'
+}

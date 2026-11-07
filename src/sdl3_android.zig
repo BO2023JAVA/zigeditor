@@ -114,6 +114,8 @@ pub const SDL_PIXELFORMAT_RGBA32: u32 = 0x16762004; // 小端 = ABGR8888（内�
 pub const SDL_TEXTUREACCESS_STATIC: c_int = 0;
 pub const SDL_TEXTUREACCESS_STREAMING: c_int = 1;
 pub const SDL_BLENDMODE_BLEND: c_int = 0x00000001;
+// SDL_LogicalPresentation 枚举：STRETCH = 整屏拉伸（UI 逻辑分辨率 → 物理屏幕）
+pub const SDL_LOGICAL_PRESENTATION_STRETCH: c_int = 1;
 
 pub const SDL_EVENT_QUIT: u32 = 0x100;
 pub const SDL_EVENT_KEY_DOWN: u32 = 0x300;
@@ -149,11 +151,18 @@ pub const createWindowAndRenderer = SDL_CreateWindowAndRenderer;
 extern fn SDL_StartTextInput(window: *SDL_Window) bool;
 pub const startTextInput = SDL_StartTextInput;
 
+/// Android 上弹系统键盘靠这个 API（SDL3 的 StartTextInput 在 Android 是空实现）
+extern fn SDL_SetTextInputArea(window: *SDL_Window, rect: ?*const SDL_Rect, cursor: c_int) bool;
+pub const setTextInputArea = SDL_SetTextInputArea;
+
 extern fn SDL_GetWindowSize(window: *SDL_Window, w: *c_int, h: *c_int) bool;
 pub const getWindowSize = SDL_GetWindowSize;
 
 extern fn SDL_GetError() [*:0]const u8;
 pub const getError = SDL_GetError;
+
+extern fn SDL_SetHint(name: [*:0]const u8, value: [*:0]const u8) bool;
+pub const setHint = SDL_SetHint;
 
 extern fn SDL_SetRenderDrawColor(renderer: *SDL_Renderer, r: u8, g: u8, b: u8, a: u8) bool;
 pub const setRenderDrawColor = SDL_SetRenderDrawColor;
@@ -169,6 +178,10 @@ pub const setRenderClipRect = SDL_SetRenderClipRect;
 
 extern fn SDL_RenderFillRect(renderer: *SDL_Renderer, rect: ?*const SDL_FRect) bool;
 pub const renderFillRect = SDL_RenderFillRect;
+
+/// 逻辑呈现：之后所有绘制坐标都按 w×h 逻辑分辨率解释，SDL 整屏拉伸
+extern fn SDL_SetRenderLogicalPresentation(renderer: *SDL_Renderer, w: c_int, h: c_int, mode: c_int) bool;
+pub const setRenderLogicalPresentation = SDL_SetRenderLogicalPresentation;
 
 extern fn SDL_CreateTexture(
     renderer: *SDL_Renderer,
@@ -215,6 +228,9 @@ pub const destroyWindow = SDL_DestroyWindow;
 
 extern fn SDL_PollEvent(event: ?*SDL_Event) bool;
 pub const pollEvent = SDL_PollEvent;
+
+extern fn SDL_PushEvent(event: *const SDL_Event) bool;
+pub const pushEvent = SDL_PushEvent;
 
 extern fn SDL_IOFromConstMem(mem: *const anyopaque, size: usize) ?*SDL_IOStream;
 pub const ioFromConstMem = SDL_IOFromConstMem;

@@ -1,0 +1,10 @@
+{
+  "languages": [
+    {
+      "grammar": "textmate/zig.tmLanguage.json",
+      "name": "zig",
+      "scopeName": "source.zig",
+      "languageConfiguration": "textmate/language-configuration.json"
+    }
+  ]
+}

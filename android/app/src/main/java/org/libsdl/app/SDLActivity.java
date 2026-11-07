@@ -1434,12 +1434,27 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             mTextEdit.setVisibility(View.VISIBLE);
             mTextEdit.requestFocus();
 
-            InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            imm.showSoftInput(mTextEdit, 0);
+            // requestFocus 是异步的：紧跟着 showSoftInput 时 view 往往还未 serve，
+            // 系统会 Ignore / onCancelled（模拟器上尤其常见）。post 到下一帧再弹。
+            // toggleSoftInput 不依赖 view served，对"not served"场景更宽容，作为兜底。
+            mTextEdit.post(new Runnable() {
+                @Override
+                public void run() {
+                    final InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (!imm.showSoftInput(mTextEdit, 0)) {
+                        imm.toggleSoftInput(InputMethodManager.SHOW_IMPLICIT, InputMethodManager.HIDE_IMPLICIT_ONLY);
+                    }
 
-            if (imm.isAcceptingText()) {
-                onNativeScreenKeyboardShown();
-            }
+                    mTextEdit.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!imm.isAcceptingText() && SDLActivity.mTextEdit != null && SDLActivity.mTextEdit.getVisibility() == View.VISIBLE) {
+                                imm.toggleSoftInput(InputMethodManager.SHOW_IMPLICIT, InputMethodManager.HIDE_IMPLICIT_ONLY);
+                            }
+                        }
+                    }, 200);
+                }
+            });
         }
     }
 

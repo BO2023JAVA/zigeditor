@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 库模块自身不需要组件；集成方 App 的 manifest 需要：
+         <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+         application 上 android:extractNativeLibs="true"（让 libzig.so 解压落盘可 exec） -->
+</manifest>

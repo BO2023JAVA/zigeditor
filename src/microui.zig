@@ -253,6 +253,8 @@ pub const Context = struct {
     text_width: *const fn (ctx: *Context, str: []const u8) i32 = defaultTextWidth,
     text_height: *const fn (ctx: *Context) i32 = defaultTextHeight,
     draw_frame: *const fn (ctx: *Context, rect: Rect, colorid: ColorId) void = defaultDrawFrame,
+    /// 文本输入区回调：输入框聚焦时把矩形传给宿主（移动端拉起屏幕键盘用，可空）
+    text_input_area: ?*const fn (ctx: *Context, x: i32, y: i32, w: i32, h: i32) void = null,
 
     // ---- 核心状态 ----
     default_style: Style = .{},
@@ -282,9 +284,9 @@ pub const Context = struct {
     layout_stack: Stack(Layout, layout_stack_cap) = .{},
 
     // ---- 对象池 ----
-    container_pool: [container_pool_cap]PoolItem = [_]PoolItem{.{}} ** container_pool_cap,
-    containers: [container_pool_cap]Container = [_]Container{.{}} ** container_pool_cap,
-    treenode_pool: [treenode_pool_cap]PoolItem = [_]PoolItem{.{}} ** treenode_pool_cap,
+    container_pool: [container_pool_cap]PoolItem = @splat(.{}),
+    containers: [container_pool_cap]Container = @splat(.{}),
+    treenode_pool: [treenode_pool_cap]PoolItem = @splat(.{}),
 
     // ---- 输入状态 ----
     mouse_pos: Vec2 = .{},
@@ -295,7 +297,7 @@ pub const Context = struct {
     mouse_pressed: u8 = 0,
     key_down: u8 = 0,
     key_pressed: u8 = 0,
-    input_text: [32]u8 = undefined,
+    input_text: [512]u8 = undefined, // 帧内输入缓冲（IME 一次可能提交整句中文，32 字节会截断成半个字符）
     input_text_len: usize = 0,
 
     // ===================== 生命周期 =====================
@@ -548,7 +550,10 @@ pub const Context = struct {
     }
 
     pub fn inputText(ctx: *Context, input: []const u8) void {
-        const n = @min(ctx.input_text.len - ctx.input_text_len, input.len);
+        var n = @min(ctx.input_text.len - ctx.input_text_len, input.len);
+        // 截断时保持 UTF-8 完整：若落点正处于多字节字符中间（落点字节是续字节），
+        // 向前回退到字符首字节，避免把半个汉字送进缓冲导致渲染成乱码/占位符。
+        while (n > 0 and n < input.len and (input[n] & 0xc0) == 0x80) n -= 1;
         if (n > 0) {
             @memcpy(ctx.input_text[ctx.input_text_len..][0..n], input[0..n]);
             ctx.input_text_len += n;
@@ -843,6 +848,9 @@ pub const Context = struct {
         ctx.updateControl(id, r, opt | opt_hold_focus);
 
         if (ctx.focus == id) {
+            // 聚焦帧把输入框矩形交给宿主：Android 靠它拉起系统 IME（SDL3 下
+            // SDL_StartTextInput 是空实现，必须调 SDL_SetTextInputArea 才弹键盘）
+            if (ctx.text_input_area) |cb| cb(ctx, r.x, r.y, r.w, r.h);
             var len = cstrLen(buf);
             // 追加文本输入（缓冲区已满则跳过，防止越界）
             const n = if (len + 1 < buf.len) @min(buf.len - len - 1, ctx.input_text_len) else 0;

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 状态栏固定为 #303030，图标用浅色以保证对比度 -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#303030</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- Android 15 强制 edge-to-edge，这里显式关闭，让上面的 statusBarColor 生效 -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
+    </style>
+</resources>

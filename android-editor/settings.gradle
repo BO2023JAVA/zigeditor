@@ -1,0 +1,21 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'zig-editor-android'
+include ':app'
+// 端上工具链（包管理 / proot 执行 / 重打包签名），独立模块，位于仓库根目录
+include ':android-toolchain'
+project(':android-toolchain').projectDir = new File(rootDir, '../android-toolchain')
