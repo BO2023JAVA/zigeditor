@@ -10,8 +10,8 @@ android {
         applicationId 'com.microui.zigeditor'
         minSdk 24
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '1.0.0'
 
         ndk {
             abiFilters 'arm64-v8a', 'x86_64'   // x86_64 供雷电等模拟器跑原生 proot
@@ -27,6 +27,9 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            // 用本机 debug keystore 签名，保证 CI/本地产物可直接安装；
+            // 正式上架请替换成项目自己的 keystore（keystore.properties + signingConfigs）。
+            signingConfig signingConfigs.debug
         }
     }
 

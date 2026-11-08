@@ -158,6 +158,31 @@ pub const setTextInputArea = SDL_SetTextInputArea;
 extern fn SDL_GetWindowSize(window: *SDL_Window, w: *c_int, h: *c_int) bool;
 pub const getWindowSize = SDL_GetWindowSize;
 
+/// 查询窗口安全区（避开状态栏/刘海），坐标与 SDL_GetWindowSize 同一空间
+extern fn SDL_GetWindowSafeArea(window: *SDL_Window, rect: *SDL_Rect) bool;
+pub const getWindowSafeArea = SDL_GetWindowSafeArea;
+
+/// 窗口显示缩放（Android 上即 dp→px 的密度倍数，mdpi = 1.0）
+extern fn SDL_GetWindowDisplayScale(window: *SDL_Window) f32;
+pub const getWindowDisplayScale = SDL_GetWindowDisplayScale;
+
+/// 纹理缩放模式：0 = 最近邻，1 = 线性（放大图标时用线性减少锯齿）
+pub const SDL_SCALEMODE_NEAREST: c_int = 0;
+pub const SDL_SCALEMODE_LINEAR: c_int = 1;
+
+extern fn SDL_SetTextureScaleMode(texture: *SDL_Texture, scale_mode: c_int) bool;
+pub const setTextureScaleMode = SDL_SetTextureScaleMode;
+
+/// 渲染目标实际分辨率 / 窗口像素尺寸 / 渲染缩放：用来确认没有"降分辨率再放大"
+extern fn SDL_GetRenderOutputSize(renderer: *SDL_Renderer, w: *c_int, h: *c_int) bool;
+pub const getRenderOutputSize = SDL_GetRenderOutputSize;
+
+extern fn SDL_GetWindowSizeInPixels(window: *SDL_Window, w: *c_int, h: *c_int) bool;
+pub const getWindowSizeInPixels = SDL_GetWindowSizeInPixels;
+
+extern fn SDL_GetRenderScale(renderer: *SDL_Renderer, sx: *f32, sy: *f32) bool;
+pub const getRenderScale = SDL_GetRenderScale;
+
 extern fn SDL_GetError() [*:0]const u8;
 pub const getError = SDL_GetError;
 
@@ -265,6 +290,10 @@ pub const ttf_get_glyph_metrics = TTF_GetGlyphMetrics;
 
 extern fn TTF_RenderGlyph_Blended(font: *TTF_Font, ch: u32, fg: SDL_Color) ?*SDL_Surface;
 pub const ttf_render_glyph_blended = TTF_RenderGlyph_Blended;
+
+/// 字体基线到行顶的距离（像素）：SDLK3_ttf 直接返回数值（注意不是出参）
+extern fn TTF_GetFontAscent(font: *TTF_Font) c_int;
+pub const ttf_get_font_ascent = TTF_GetFontAscent;
 
 /// 取 SDL 错误信息（只在 Debug 构建打印用）
 pub fn errorString() []const u8 {

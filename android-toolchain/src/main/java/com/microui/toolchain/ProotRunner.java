@@ -187,12 +187,14 @@ public final class ProotRunner {
         binds.add(sdlDir.getAbsolutePath() + ":/sdl");
         if (frameworkDir.isDirectory()) binds.add(frameworkDir.getAbsolutePath() + ":/framework");
 
+        // 新项目把框架放在 framework/ 下，用户代码 app.zig 留在根目录；旧项目仍是平铺结构
+        String pre = new File(srcDir, "framework/demo.zig").isFile() ? "framework/" : "";
         String script = "set -e; cd /work; "
                 + "mkdir -p /out /tmp/zc /tmp/zgc; "
                 + "/opt/zig/zig build-lib -dynamic -fstrip -O ReleaseSmall -target aarch64-linux-android "
-                + "--name microzig --dep microui --dep microui_app --dep app \"-Mroot=demo.zig\" "
-                + "\"-Mmicroui=microui.zig\" --dep microui --dep sdl3_android \"-Mbackend=renderer_android.zig\" "
-                + "\"-Msdl3_android=sdl3_android.zig\" --dep microui --dep backend \"-Mmicroui_app=microui_app.zig\" "
+                + "--name microzig --dep microui --dep microui_app --dep app \"-Mroot=" + pre + "demo.zig\" "
+                + "\"-Mmicroui=" + pre + "microui.zig\" --dep microui --dep sdl3_android \"-Mbackend=" + pre + "renderer_android.zig\" "
+                + "\"-Msdl3_android=" + pre + "sdl3_android.zig\" --dep microui --dep backend \"-Mmicroui_app=" + pre + "microui_app.zig\" "
                 + "--dep microui --dep microui_app \"-Mapp=app.zig\" "
                 + "/sdl/libSDL3.so /sdl/libSDL3_ttf.so \"-femit-bin=/out/libmicrozig.so\" "
                 + "--cache-dir /tmp/zc --global-cache-dir /tmp/zgc; "

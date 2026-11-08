@@ -1,6 +1,10 @@
-//! 简易 GUI HelloWorld 示例（类似 Android Studio 的默认模板）：
-//! 占满屏幕的窗口 + 一行问候语 + 一个按钮 + 点击计数。
-//! 界面逻辑保持平台无关，由 microui_app 的 App.run 每帧回调驱动。
+//! ★ 你的应用从本文件写起（这是项目里唯一需要改的文件）。
+//!
+//! - onFrame(app, ctx, screen)：每帧画界面，begin/end 已由框架包好。
+//! - applyTheme(ctx)：可选，改颜色 / 控件尺寸。
+//!
+//! 框架代码都在 framework/ 目录（microui 核心、SDL 后端、字体等），一般不用动。
+//! 下面是一个最小示例：占满屏幕的窗口 + 一行问候语 + 一个按钮 + 点击计数。
 
 const std = @import("std");
 const microui = @import("microui");

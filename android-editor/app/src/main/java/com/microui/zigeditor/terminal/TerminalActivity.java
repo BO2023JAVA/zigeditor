@@ -600,8 +600,8 @@ public class TerminalActivity extends Activity {
         final File sdl = new File(root, "sdl");
         final File template = ProotRunner.templateApk(this);
 
-        if (!new File(src, "demo.zig").isFile()) {
-            log("\n不是 GUI 项目（缺 demo.zig）：" + src
+        if (!new File(src, "framework/demo.zig").isFile() && !new File(src, "demo.zig").isFile()) {
+            log("\n不是 GUI 项目（缺 framework/demo.zig）：" + src
                     + "\n新建项目时会自动带上 GUI 模板结构，或清除应用数据后重进终端补回内置模板");
             append(promptText);
             return;
@@ -650,6 +650,7 @@ public class TerminalActivity extends Activity {
         String msg = "是否把 libmicrozig.so 打进模板 APK，签名并安装？";
         if (meta[1] != null) msg += "\n应用名称：" + meta[1];
         if (meta[0] != null) msg += "\n包名：" + meta[0];
+        if (meta[2] != null) msg += "\n图标：" + meta[2];
         new AlertDialog.Builder(this)
                 .setTitle("编译成功")
                 .setMessage(msg)
@@ -661,8 +662,9 @@ public class TerminalActivity extends Activity {
                     }
                     new Thread(() -> {
                         try {
+                            File icon = meta[2] != null ? new File(projectDir, meta[2]) : null;
                             File apk = BuildPipeline.buildAndInstall(this, template, so,
-                                    meta[0], meta[1], step -> log("[打包] " + step));
+                                    meta[0], meta[1], icon, step -> log("[打包] " + step));
                             lastSignedApk = apk;
                             log("[完成] " + apk);
                         } catch (Exception e) {
@@ -674,18 +676,20 @@ public class TerminalActivity extends Activity {
                 .show();
     }
 
-    /** 读项目根目录的 microui.json：[0]=包名，[1]=应用名（缺失为 null）。 */
+    /** 读项目根目录的 config.json（兼容旧 microui.json）：[0]=包名，[1]=应用名，[2]=图标文件名。 */
     private String[] projectMeta(File dir) {
-        File f = new File(dir, "microui.json");
-        if (!f.isFile()) return new String[]{null, null};
+        File f = new File(dir, "config.json");
+        if (!f.isFile()) f = new File(dir, "microui.json");
+        if (!f.isFile()) return new String[]{null, null, null};
         try {
             String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
                     StandardCharsets.UTF_8);
             org.json.JSONObject o = new org.json.JSONObject(s);
-            return new String[]{o.optString("package", null), o.optString("appName", null)};
+            return new String[]{o.optString("package", null), o.optString("appName", null),
+                    o.optString("icon", null)};
         } catch (Exception e) {
-            log("[配置] 读取 microui.json 失败：" + e.getMessage());
-            return new String[]{null, null};
+            log("[配置] 读取 config.json 失败：" + e.getMessage());
+            return new String[]{null, null, null};
         }
     }
 

@@ -1,6 +1,14 @@
 package com.microui.toolchain;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Shader;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -31,16 +39,24 @@ public final class BuildPipeline {
 
     /** 把 so 装进模板 APK 并签名，返回已签名 APK 文件（不安装）。 */
     public static File repackAndSign(Context c, File templateApk, File so, Listener l) throws Exception {
-        return repackAndSign(c, templateApk, so, null, null, l);
+        return repackAndSign(c, templateApk, so, null, null, null, l);
+    }
+
+    public static File repackAndSign(Context c, File templateApk, File so,
+                                     String packageName, String appName, Listener l) throws Exception {
+        return repackAndSign(c, templateApk, so, packageName, appName, null, l);
     }
 
     /**
-     * 同上，并支持自定义包名 / 应用显示名：
+     * 同上，并支持自定义包名 / 应用显示名 / 应用图标：
      * 包名改 AndroidManifest 的 package（activity 类名保持模板的全名，dex 不变）；
-     * 应用名改 resources.arsc 里模板默认的显示名。null 或空表示沿用模板。
+     * 应用名改 resources.arsc 里模板默认的显示名；
+     * 图标按 5 档 mipmap 尺寸重绘后替换模板 APK 里的 ic_launcher.png。
+     * null 或空表示沿用模板。
      */
     public static File repackAndSign(Context c, File templateApk, File so,
-                                     String packageName, String appName, Listener l) throws Exception {
+                                     String packageName, String appName, File iconFile,
+                                     Listener l) throws Exception {
         if (!templateApk.isFile()) throw new IOException("模板 APK 不存在: " + templateApk);
         if (!so.isFile()) throw new IOException("编译产物不存在: " + so);
 
@@ -70,6 +86,12 @@ public final class BuildPipeline {
                 }
             }
         }
+        // 应用图标：项目根目录 config.json 指定的图片（默认 icon.png），按 mipmap 尺寸重绘
+        if (iconFile != null && iconFile.isFile()) {
+            if (addIconOverrides(repl, iconFile) && l != null) {
+                l.onStep("应用图标 → " + iconFile.getName());
+            }
+        }
         Repacker.repack(templateApk, repl, unsigned);
 
         if (l != null) l.onStep("apksig v2/v3 签名");
@@ -81,15 +103,68 @@ public final class BuildPipeline {
 
     /** 完整闭环：重打包 + 签名 + 拉起系统安装器。 */
     public static File buildAndInstall(Context c, File templateApk, File so, Listener l) throws Exception {
-        return buildAndInstall(c, templateApk, so, null, null, l);
+        return buildAndInstall(c, templateApk, so, null, null, null, l);
     }
 
     public static File buildAndInstall(Context c, File templateApk, File so,
                                        String packageName, String appName, Listener l) throws Exception {
-        File apk = repackAndSign(c, templateApk, so, packageName, appName, l);
+        return buildAndInstall(c, templateApk, so, packageName, appName, null, l);
+    }
+
+    public static File buildAndInstall(Context c, File templateApk, File so,
+                                       String packageName, String appName, File iconFile,
+                                       Listener l) throws Exception {
+        File apk = repackAndSign(c, templateApk, so, packageName, appName, iconFile, l);
         if (l != null) l.onStep("PackageInstaller 安装");
         ApkInstaller.install(c, apk);
         return apk;
+    }
+
+    /** 模板 APK 里的 5 档启动图标条目 */
+    private static final String[] ICON_ENTRIES = {
+            "res/mipmap-mdpi-v4/ic_launcher.png",
+            "res/mipmap-hdpi-v4/ic_launcher.png",
+            "res/mipmap-xhdpi-v4/ic_launcher.png",
+            "res/mipmap-xxhdpi-v4/ic_launcher.png",
+            "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+    };
+    private static final int[] ICON_SIZES = {48, 72, 96, 144, 192};
+
+    /** 把项目图标居中裁成正方形，按 5 档尺寸圆角处理后写入替换表。失败返回 false（沿用模板图标）。 */
+    private static boolean addIconOverrides(java.util.Map<String, byte[]> repl, File iconFile) {
+        Bitmap src = BitmapFactory.decodeFile(iconFile.getAbsolutePath());
+        if (src == null) return false;
+        try {
+            int w = src.getWidth();
+            int h = src.getHeight();
+            int side = Math.min(w, h);
+            Bitmap square = Bitmap.createBitmap(src, (w - side) / 2, (h - side) / 2, side, side);
+            for (int i = 0; i < ICON_ENTRIES.length; i++) {
+                int n = ICON_SIZES[i];
+                Bitmap small = Bitmap.createScaledBitmap(square, n, n, true);
+                Bitmap out = roundCorners(small);
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                out.compress(Bitmap.CompressFormat.PNG, 100, bo);
+                repl.put(ICON_ENTRIES[i], bo.toByteArray());
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 圆角半径 12%（和内置图标一致），圆角外透明。 */
+    private static Bitmap roundCorners(Bitmap src) {
+        int s = src.getWidth();
+        Bitmap out = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(out);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+        Path path = new Path();
+        float r = s * 0.12f;
+        path.addRoundRect(new RectF(0, 0, s, s), r, r, Path.Direction.CW);
+        cv.drawPath(path, p);
+        return out;
     }
 
     private static byte[] readEntry(java.util.zip.ZipFile zip, String name) throws IOException {
