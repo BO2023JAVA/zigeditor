@@ -848,8 +848,7 @@ pub const Context = struct {
         ctx.updateControl(id, r, opt | opt_hold_focus);
 
         if (ctx.focus == id) {
-            // 聚焦帧把输入框矩形交给宿主：Android 靠它拉起系统 IME（SDL3 下
-            // SDL_StartTextInput 是空实现，必须调 SDL_SetTextInputArea 才弹键盘）
+            // 聚焦帧把输入框矩形交给宿主：Android 后端据此拉起系统 IME 并定位候选窗
             if (ctx.text_input_area) |cb| cb(ctx, r.x, r.y, r.w, r.h);
             var len = cstrLen(buf);
             // 追加文本输入（缓冲区已满则跳过，防止越界）

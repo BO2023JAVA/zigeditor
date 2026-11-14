@@ -1,10 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- 状态栏固定为 #303030，图标用浅色以保证对比度 -->
+    <!-- Material 3 浅色主题：状态栏跟随 surface，深色图标 -->
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#303030</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/m3_surface</item>
+        <item name="android:statusBarColor">@color/m3_surface</item>
+        <item name="android:navigationBarColor">@color/m3_surface</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">@color/m3_primary</item>
+        <item name="android:alertDialogTheme">@style/AppDialog</item>
         <!-- Android 15 强制 edge-to-edge，这里显式关闭，让上面的 statusBarColor 生效 -->
         <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
+    </style>
+
+    <!-- M3 对话框：28dp 圆角、surfaceContainerHigh、主色文字按钮 -->
+    <style name="AppDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:background">@drawable/m3_dialog</item>
+        <item name="android:colorAccent">@color/m3_primary</item>
+        <item name="android:textColorPrimary">@color/m3_on_surface</item>
+        <item name="android:textColorSecondary">@color/m3_on_surface_variant</item>
+        <item name="android:buttonBarButtonStyle">@style/M3DialogButton</item>
+    </style>
+
+    <style name="M3DialogButton" parent="@android:style/Widget.Material.Button.Borderless">
+        <item name="android:textColor">@color/m3_primary</item>
+        <item name="android:textAllCaps">false</item>
     </style>
 </resources>

@@ -151,7 +151,10 @@ pub const createWindowAndRenderer = SDL_CreateWindowAndRenderer;
 extern fn SDL_StartTextInput(window: *SDL_Window) bool;
 pub const startTextInput = SDL_StartTextInput;
 
-/// Android 上弹系统键盘靠这个 API（SDL3 的 StartTextInput 在 Android 是空实现）
+extern fn SDL_StopTextInput(window: *SDL_Window) void;
+pub const stopTextInput = SDL_StopTextInput;
+
+/// 设置输入框矩形：Android 用它定位输入法候选窗
 extern fn SDL_SetTextInputArea(window: *SDL_Window, rect: ?*const SDL_Rect, cursor: c_int) bool;
 pub const setTextInputArea = SDL_SetTextInputArea;
 

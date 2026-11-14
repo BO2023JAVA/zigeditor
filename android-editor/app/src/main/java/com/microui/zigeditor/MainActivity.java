@@ -16,6 +16,8 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,13 +36,12 @@ import java.util.List;
  */
 public class MainActivity extends Activity {
 
-    /** 新项目自带的 starter 文件。 */
+    /** 新项目自带的 starter 文件（模板复制失败时的兜底）。 */
     private static final String SAMPLE_CODE = "const std = @import(\"std\");\n"
             + "\n"
             + "// 中文注释：UTF-8 保存测试\n"
             + "pub fn main() !void {\n"
-            + "    const stdout = std.io.getStdOut().writer();\n"
-            + "    try stdout.print(\"Hello, Zig!\\n\", .{});\n"
+            + "    std.debug.print(\"Hello, Zig!\\n\", .{});\n"
             + "}\n";
 
     /** 项目配置文件（旧项目仍可能叫 microui.json，读取时兼容） */
@@ -55,6 +56,12 @@ public class MainActivity extends Activity {
     private File projectsRoot;
     private ProjectAdapter adapter;
     private final List<File> projects = new ArrayList<>();
+    /** 列表展示用的派生数据，refresh() 时统一算一次，避免 getView 里反复读盘。 */
+    private final java.util.Map<String, String> kindLabels = new java.util.HashMap<>();
+    private final java.util.Map<String, Long> sizes = new java.util.HashMap<>();
+    private final java.util.Map<String, Bitmap> icons = new java.util.HashMap<>();
+    /** 内置默认图标解码一次复用（列表占位 + 新建对话框预览）。 */
+    private Bitmap defaultIcon;
     /** 正在等待系统图片选择结果的项目的目录 */
     private File pendingIconDir;
     /** 新建项目对话框里已选中的图标（为空表示用内置默认图标） */
@@ -86,6 +93,25 @@ public class MainActivity extends Activity {
         });
 
         findViewById(R.id.new_project).setOnClickListener(v -> showNewProjectDialog());
+
+        maybePromptToolchain();
+    }
+
+    /** 静态标记：每次冷启动只引导一次。 */
+    private static boolean toolchainPromptShown;
+
+    /** 首次进入且 Ubuntu/Zig 未就绪时，引导先去「包管理」装环境，避免建完项目才发现编译不了。 */
+    private void maybePromptToolchain() {
+        if (toolchainPromptShown) return;
+        toolchainPromptShown = true;
+        if (com.microui.toolchain.ProotRunner.ready(this)) return;
+        new AlertDialog.Builder(this)
+                .setTitle("先安装编译环境")
+                .setMessage("编译和运行需要 Ubuntu 运行时 + Zig 工具链（可在「包管理」在线下载或本地导入）。\n\n建议先安装，再开始新建项目。")
+                .setPositiveButton("去安装", (d, w) -> startActivity(new Intent(this,
+                        com.microui.zigeditor.terminal.PackagesActivity.class)))
+                .setNegativeButton("稍后", null)
+                .show();
     }
 
     @Override
@@ -105,10 +131,18 @@ public class MainActivity extends Activity {
 
     private void refresh() {
         projects.clear();
+        kindLabels.clear();
+        sizes.clear();
+        icons.clear();
         File[] dirs = projectsRoot.listFiles(File::isDirectory);
         if (dirs != null) {
             projects.addAll(Arrays.asList(dirs));
-            projects.sort(Comparator.comparing((File f) -> f.getName().toLowerCase()));
+            projects.sort(Comparator.comparing((File f) -> f.getName().toLowerCase(java.util.Locale.ROOT)));
+            for (File d : projects) {
+                // 类型 + 体积只算一次，列表滚动时直接用缓存
+                kindLabels.put(d.getName(), kindLabel(readMeta(d)[3]));
+                sizes.put(d.getName(), dirSize(d));
+            }
         }
         adapter.notifyDataSetChanged();
     }
@@ -121,41 +155,71 @@ public class MainActivity extends Activity {
 
         @Override public View getView(int position, View convertView, ViewGroup parent) {
             File dir = projects.get(position);
-            LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(16), dp(10), dp(16), dp(10));
+            RowHolder h;
+            LinearLayout row;
+            if (convertView instanceof LinearLayout && convertView.getTag() instanceof RowHolder) {
+                row = (LinearLayout) convertView;
+                h = (RowHolder) row.getTag();
+            } else {
+                row = new LinearLayout(MainActivity.this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setBackgroundResource(R.drawable.m3_card);
+                row.setPadding(dp(16), dp(12), dp(16), dp(12));
 
-            ImageView icon = new ImageView(MainActivity.this);
-            int side = dp(44);
-            icon.setLayoutParams(new LinearLayout.LayoutParams(side, side));
-            icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            Bitmap bmp = loadProjectIcon(dir, 96);
-            if (bmp != null) icon.setImageBitmap(bmp);
-            else icon.setImageResource(android.R.drawable.sym_def_app_icon);
-            icon.setContentDescription("更换应用图标");
-            icon.setOnClickListener(v -> pickProjectIcon(dir));
-            row.addView(icon);
+                h = new RowHolder();
+                h.icon = new ImageView(MainActivity.this);
+                int side = dp(44);
+                h.icon.setLayoutParams(new LinearLayout.LayoutParams(side, side));
+                h.icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                h.icon.setContentDescription("更换应用图标");
+                row.addView(h.icon);
 
-            LinearLayout texts = new LinearLayout(MainActivity.this);
-            texts.setOrientation(LinearLayout.VERTICAL);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            lp.leftMargin = dp(12);
-            texts.setLayoutParams(lp);
+                LinearLayout texts = new LinearLayout(MainActivity.this);
+                texts.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                lp.leftMargin = dp(12);
+                texts.setLayoutParams(lp);
 
-            TextView name = new TextView(MainActivity.this);
-            name.setText(dir.getName());
-            name.setTextSize(16);
-            TextView size = new TextView(MainActivity.this);
-            size.setText(fmtSize(dirSize(dir)));
-            size.setTextSize(12);
-            size.setTextColor(0xFF888888);
-            texts.addView(name);
-            texts.addView(size);
-            row.addView(texts);
+                h.name = new TextView(MainActivity.this);
+                h.name.setTextSize(16);
+                h.name.setTextColor(getColor(R.color.m3_on_surface));
+                h.size = new TextView(MainActivity.this);
+                h.size.setTextSize(12);
+                h.size.setTextColor(getColor(R.color.m3_on_surface_variant));
+                texts.addView(h.name);
+                texts.addView(h.size);
+                row.addView(texts);
+                row.setTag(h);
+            }
+
+            h.name.setText(dir.getName());
+            String kind = kindLabels.get(dir.getName());
+            Long bytes = sizes.get(dir.getName());
+            h.size.setText((kind == null ? "图形界面" : kind) + " · "
+                    + fmtSize(bytes == null ? 0 : bytes));
+            Bitmap bmp = iconFor(dir);
+            if (bmp != null) h.icon.setImageBitmap(bmp);
+            else h.icon.setImageResource(android.R.drawable.sym_def_app_icon);
+            h.icon.setOnClickListener(v -> pickProjectIcon(dir));
             return row;
         }
+    }
+
+    private static final class RowHolder {
+        ImageView icon;
+        TextView name;
+        TextView size;
+    }
+
+    /** 列表缩略图：按项目名缓存，refresh() 时统一清空。 */
+    private Bitmap iconFor(File dir) {
+        String key = dir.getName();
+        if (icons.containsKey(key)) return icons.get(key);
+        Bitmap bmp = loadProjectIcon(dir, 96);
+        icons.put(key, bmp);
+        return bmp;
     }
 
     /** 读项目图标做列表缩略图；没有 icon.png 时用内置默认图标。 */
@@ -163,15 +227,12 @@ public class MainActivity extends Activity {
         File f = new File(dir, DEFAULT_ICON_FILE);
         if (f.isFile()) {
             try {
-                return decodeFileSample(f.getAbsolutePath(), maxPx);
+                Bitmap bmp = decodeFileSample(f.getAbsolutePath(), maxPx);
+                if (bmp != null) return bmp;
             } catch (Exception ignored) {
             }
         }
-        try (java.io.InputStream in = getAssets().open(DEFAULT_ICON_ASSET)) {
-            return BitmapFactory.decodeStream(in);
-        } catch (IOException e) {
-            return null;
-        }
+        return loadDefaultIconBitmap();
     }
 
     /** 按最大边采样解码，避免大图占内存。 */
@@ -232,10 +293,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 内置默认图标（用于新建对话框的预览）。 */
+    /** 内置默认图标：解码一次后缓存（列表占位与新建对话框预览共用）。 */
     private Bitmap loadDefaultIconBitmap() {
+        if (defaultIcon != null) return defaultIcon;
         try (java.io.InputStream in = getAssets().open(DEFAULT_ICON_ASSET)) {
-            return BitmapFactory.decodeStream(in);
+            defaultIcon = BitmapFactory.decodeStream(in);
+            return defaultIcon;
         } catch (IOException e) {
             return null;
         }
@@ -262,7 +325,11 @@ public class MainActivity extends Activity {
         startActivity(intent);
     }
 
+    /** 新建项目对话框；连点时用它挡住重复弹出。 */
+    private AlertDialog newProjectDialog;
+
     private void showNewProjectDialog() {
+        if (newProjectDialog != null && newProjectDialog.isShowing()) return;
         String rnd = random4();
         int pad = (int) (16 * getResources().getDisplayMetrics().density);
         android.widget.LinearLayout box = new android.widget.LinearLayout(this);
@@ -272,6 +339,38 @@ public class MainActivity extends Activity {
         EditText name = addField(box, "项目名（文件夹名）", "demo" + rnd);
         EditText appName = addField(box, "应用名（桌面显示）", "demo" + rnd);
         EditText pkg = addField(box, "包名（如 com.example.app）", "com.zigeditor.demo" + rnd);
+
+        // 项目类型：决定是否带内置 UI 框架（图形界面 = microui + SDL；纯终端 = 只有 std）
+        TextView kindCaption = new TextView(this);
+        kindCaption.setText("项目类型");
+        kindCaption.setTextSize(12);
+        kindCaption.setPadding(0, dp(10), 0, 0);
+        box.addView(kindCaption);
+
+        RadioGroup kindGroup = new RadioGroup(this);
+        kindGroup.setOrientation(RadioGroup.HORIZONTAL);
+        RadioButton guiRadio = new RadioButton(this);
+        guiRadio.setId(View.generateViewId());
+        guiRadio.setText("图形界面");
+        guiRadio.setChecked(true);
+        RadioButton consoleRadio = new RadioButton(this);
+        consoleRadio.setId(View.generateViewId());
+        consoleRadio.setText("纯终端");
+        RadioButton nativeRadio = new RadioButton(this);
+        nativeRadio.setId(View.generateViewId());
+        nativeRadio.setText("原生zig");
+        kindGroup.addView(guiRadio);
+        kindGroup.addView(consoleRadio);
+        kindGroup.addView(nativeRadio);
+        box.addView(kindGroup);
+
+        TextView kindHint = new TextView(this);
+        kindHint.setText("图形界面：内置 microui + SDL，适合做应用/游戏\n"
+                + "纯终端：只用 Zig 标准库，输出显示在 APK 的终端窗口里\n"
+                + "原生zig：空目录，创建后进终端 zig init 生成结构，可编译 .so 到 Download");
+        kindHint.setTextSize(11);
+        kindHint.setTextColor(0xFF888888);
+        box.addView(kindHint);
 
         // 应用图标：默认内置吉祥物，可在此换图，右侧实时预览
         LinearLayout iconRow = new LinearLayout(this);
@@ -294,9 +393,9 @@ public class MainActivity extends Activity {
         iconRow.addView(pickIcon);
         box.addView(iconRow);
 
-        new AlertDialog.Builder(this)
+        newProjectDialog = new AlertDialog.Builder(this)
                 .setTitle("新建项目")
-                .setMessage("自动带上简易 GUI HelloWorld 模板，可直接编译打包成 APK。\n"
+                .setMessage("按所选类型带上 HelloWorld 模板，可直接编译打包成 APK。\n"
                         + "应用图标默认是内置吉祥物，也可以现在选择你自己的图片。")
                 .setView(box)
                 .setPositiveButton("创建", (dialog, which) -> {
@@ -320,19 +419,28 @@ public class MainActivity extends Activity {
                                 Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    // 默认带 GUI 文件结构（app.zig / framework/ 等），可直接编译打包
-                    if (!copyGuiTemplate(dir, app.isEmpty() ? nameText : app)) writeSample(new File(dir, "main.zig"));
+                    // 按所选类型复制模板（gui=core/+ui/，console=core/+app.zig）；
+                    // 原生zig 不预设文件：空目录创建后跳终端 zig init 生成结构
+                    String kind = guiRadio.isChecked() ? "gui"
+                            : (consoleRadio.isChecked() ? "console" : "native");
+                    String title = app.isEmpty() ? nameText : app;
+                    boolean isNative = "native".equals(kind);
+                    if (!isNative && !copyTemplate(dir, title, kind))
+                        writeSample(new File(dir, "main.zig"));
                     if (!copyChosenIcon(dir)) copyDefaultIcon(dir);
-                    writeMeta(dir, app.isEmpty() ? nameText : app, p, DEFAULT_ICON_FILE);
+                    writeMeta(dir, title, p, DEFAULT_ICON_FILE, kind);
                     pendingNewIconUri = null;
                     newIconPreview = null;
                     refresh();
+                    if (isNative) openTerminalForInit(dir);
                 })
                 .setNegativeButton("取消", (dialog, which) -> {
                     pendingNewIconUri = null;
                     newIconPreview = null;
                 })
-                .show();
+                .create();
+        newProjectDialog.setOnDismissListener(d -> newProjectDialog = null);
+        newProjectDialog.show();
     }
 
     /** 弹窗里加「标签 + 输入框」一组（输入框有默认值时提示语看不见，所以用独立标签）。 */
@@ -374,15 +482,41 @@ public class MainActivity extends Activity {
                 .setTitle("删除项目")
                 .setMessage("确定删除项目 " + dir.getName() + "？\n" + dir.getAbsolutePath()
                         + "\n（目录内所有文件都会被删除，不可撤销）")
-                .setPositiveButton("删除", (d, w) -> {
-                    if (!deleteRecursive(dir)) {
-                        Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    refresh();
-                })
+                .setPositiveButton("删除", (d, w) -> deleteProject(dir))
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /** root 终端创建的目录应用自身可能无权清空；普通删除失败时在有 ROOT 的设备上补一次 root 删除。 */
+    private void deleteProject(File dir) {
+        Toast.makeText(this, "正在删除…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            boolean deleted = deleteRecursive(dir);
+            if (!deleted && com.microui.toolchain.ProotRunner.suAvailable()) {
+                deleted = deleteAsRoot(dir);
+            }
+            final boolean success = deleted && !dir.exists();
+            runOnUiThread(() -> {
+                if (!success) {
+                    Toast.makeText(this, "删除失败：请检查文件权限；root 创建的文件需要 ROOT 权限清理",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                refresh();
+                Toast.makeText(this, "项目已删除", Toast.LENGTH_SHORT).show();
+            });
+        }, "delete-project").start();
+    }
+
+    private static boolean deleteAsRoot(File dir) {
+        String path = "'" + dir.getAbsolutePath().replace("'", "'\\''") + "'";
+        try {
+            Process p = new ProcessBuilder("su", "-c", "rm -rf -- " + path)
+                    .redirectErrorStream(true).start();
+            return p.waitFor() == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static boolean deleteRecursive(File f) {
@@ -433,26 +567,27 @@ public class MainActivity extends Activity {
                             return;
                         }
                     }
-                    writeMeta(target, app.isEmpty() ? nameText : app, p, readMeta(target)[2]);
+                    String kind = meta[3] != null ? meta[3] : "gui";
+                    writeMeta(target, app.isEmpty() ? nameText : app, p, readMeta(target)[2], kind);
                     refresh();
                 })
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    /** 读项目配置：[0]=包名，[1]=应用名，[2]=图标文件名（缺失为 null）。优先 config.json，兼容旧 microui.json。 */
+    /** 读项目配置：[0]=包名，[1]=应用名，[2]=图标文件名，[3]=项目类型（缺失为 null）。优先 config.json，兼容旧 microui.json。 */
     private String[] readMeta(File dir) {
         File f = new File(dir, CONFIG_NAME);
         if (!f.isFile()) f = new File(dir, CONFIG_OLD);
-        if (!f.isFile()) return new String[]{null, null, null};
+        if (!f.isFile()) return new String[]{null, null, null, null};
         try {
             String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
                     StandardCharsets.UTF_8);
             org.json.JSONObject o = new org.json.JSONObject(s);
             return new String[]{o.optString("package", null), o.optString("appName", null),
-                    o.optString("icon", null)};
+                    o.optString("icon", null), o.optString("kind", null)};
         } catch (Exception e) {
-            return new String[]{null, null, null};
+            return new String[]{null, null, null, null};
         }
     }
 
@@ -460,13 +595,20 @@ public class MainActivity extends Activity {
         return String.format(java.util.Locale.US, "%04d", new java.util.Random().nextInt(10000));
     }
 
-    /** 写项目配置：应用名 + 包名 + 图标文件名；写完顺手删掉旧的 microui.json。 */
-    private void writeMeta(File dir, String appName, String pkg, String icon) {
+    /** 写项目配置：应用名 + 包名 + 图标文件名 + 项目类型；写完顺手删掉旧的 microui.json。 */
+    private void writeMeta(File dir, String appName, String pkg, String icon, String kind) {
         try {
             org.json.JSONObject o = new org.json.JSONObject();
+            File current = new File(dir, CONFIG_NAME);
+            if (!current.isFile()) current = new File(dir, CONFIG_OLD);
+            if (current.isFile()) {
+                o = new org.json.JSONObject(new String(java.nio.file.Files.readAllBytes(current.toPath()),
+                        StandardCharsets.UTF_8));
+            }
             o.put("appName", appName);
             o.put("package", pkg);
             if (icon != null) o.put("icon", icon);
+            if (kind != null) o.put("kind", kind);
             try (FileOutputStream out = new FileOutputStream(new File(dir, CONFIG_NAME))) {
                 out.write(o.toString(2).getBytes(StandardCharsets.UTF_8));
             }
@@ -548,6 +690,7 @@ public class MainActivity extends Activity {
                 String[] m = readMeta(dir);
                 if (m[0] != null) o.put("package", m[0]);
                 if (m[1] != null) o.put("appName", m[1]);
+                o.put("kind", m[3] != null ? m[3] : "gui");
             }
             o.put("icon", DEFAULT_ICON_FILE);
             try (FileOutputStream out = new FileOutputStream(new File(dir, CONFIG_NAME))) {
@@ -560,17 +703,36 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 复制 APK 内置的 microui-template 到新项目：
-     *  根目录只留 app.zig（用户从这里写），框架在 framework/ 下（含 font_simhei.ttf，供 @embedFile 使用）；
-     *  app.zig 里的窗口标题「microui Hello」替换成实际项目名。 */
-    private boolean copyGuiTemplate(File dir, String title) {
+    /** 复制 APK 内置模板到新项目：
+     *  图形界面 → bundled/template-gui（core/ 必要件 + ui/ 可选 UI 库 + 字体）；
+     *  纯终端   → bundled/template-console（只有 core/main.zig 入口）。 */
+    private boolean copyTemplate(File dir, String title, String kind) {
+        String asset = "bundled/template-" + kind;
         try {
-            copyAssetDir("bundled/microui-template", dir, title);
+            copyAssetDir(asset, dir, title);
             return true;
         } catch (IOException e) {
-            Toast.makeText(this, "复制 GUI 模板失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "复制" + kindLabel(kind) + "模板失败：" + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
             return false;
         }
+    }
+
+    /** 原生 zig 项目：创建后跳终端，在项目目录里 zig init 生成结构（不预设模板文件）。 */
+    private void openTerminalForInit(File dir) {
+        Intent i = new Intent(this, com.microui.zigeditor.terminal.TerminalActivity.class);
+        i.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_PROJECT_DIR,
+                dir.getAbsolutePath());
+        i.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_AUTO_COMPILE, false);
+        i.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_RUN_CMD, "zig init");
+        startActivity(i);
+    }
+
+    /** 项目类型显示名；未知/旧项目按图形界面。 */
+    static String kindLabel(String kind) {
+        if ("console".equals(kind)) return "纯终端";
+        if ("native".equals(kind)) return "原生zig";
+        return "图形界面";
     }
 
     /** 递归复制 assets 目录；app.zig 替换标题后写入。 */

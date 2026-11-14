@@ -3,14 +3,14 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#101014">
+    android:background="#141218">
 
     <TextView
         android:id="@+id/terminal_env"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="8dp"
-        android:textColor="#8ab4f8"
+        android:textColor="#D0BCFF"
         android:textSize="12sp"
         android:text="检查 proot / rootfs / zig ..." />
 
@@ -20,7 +20,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="#101014"
+        android:background="#141218"
         android:cursorVisible="true"
         android:fontFamily="monospace"
         android:gravity="top|start"
@@ -29,7 +29,7 @@
         android:inputType="textNoSuggestions|textMultiLine"
         android:padding="8dp"
         android:scrollbars="vertical"
-        android:textColor="#e6e6e6"
+        android:textColor="#E6E0E9"
         android:textCursorDrawable="@null"
         android:textSize="12sp" />
 
@@ -37,7 +37,7 @@
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#18181C"
+        android:background="#211F26"
         android:scrollbars="none">
 
         <LinearLayout
@@ -53,7 +53,7 @@
                 android:minWidth="48dp"
                 android:text="Tab"
                 android:textAllCaps="false"
-                android:textColor="#E6E6E6" />
+                android:textColor="#E6E0E9" />
 
             <Button
                 android:id="@+id/btn_up"
@@ -62,7 +62,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="↑"
-                android:textColor="#E6E6E6" />
+                android:textColor="#E6E0E9" />
 
             <Button
                 android:id="@+id/btn_down"
@@ -71,7 +71,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="↓"
-                android:textColor="#E6E6E6" />
+                android:textColor="#E6E0E9" />
 
             <Button
                 android:id="@+id/btn_left"
@@ -80,7 +80,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="←"
-                android:textColor="#E6E6E6" />
+                android:textColor="#E6E0E9" />
 
             <Button
                 android:id="@+id/btn_right"
@@ -89,7 +89,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="→"
-                android:textColor="#E6E6E6" />
+                android:textColor="#E6E0E9" />
 
             <Button
                 android:id="@+id/btn_ctrl"
@@ -99,7 +99,7 @@
                 android:minWidth="56dp"
                 android:text="Ctrl"
                 android:textAllCaps="false"
-                android:textColor="#8AB4F8" />
+                android:textColor="#D0BCFF" />
 
             <Button
                 android:id="@+id/btn_pkgs"
@@ -109,7 +109,7 @@
                 android:minWidth="72dp"
                 android:text="包管理"
                 android:textAllCaps="false"
-                android:textColor="#B5CEA8" />
+                android:textColor="#EFB8C8" />
         </LinearLayout>
     </HorizontalScrollView>
 

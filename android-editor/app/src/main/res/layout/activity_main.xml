@@ -2,14 +2,18 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/m3_surface"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:paddingStart="20dp"
+    android:paddingTop="16dp"
+    android:paddingEnd="20dp">
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Zig 项目"
-        android:textSize="16sp"
+        android:textColor="@color/m3_on_surface"
+        android:textSize="24sp"
         android:textStyle="bold" />
 
     <TextView
@@ -17,6 +21,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
+        android:textColor="@color/m3_on_surface_variant"
         android:textSize="12sp" />
 
     <ListView
@@ -24,12 +29,25 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="10dp"
+        android:listSelector="@android:color/transparent"
+        android:paddingBottom="8dp" />
 
     <Button
         android:id="@+id/new_project"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="新建项目" />
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/m3_button_filled"
+        android:foreground="?android:attr/selectableItemBackground"
+        android:minHeight="52dp"
+        android:stateListAnimator="@null"
+        android:text="新建项目"
+        android:textAllCaps="false"
+        android:textColor="@color/m3_on_primary"
+        android:textSize="16sp" />
 
 </LinearLayout>

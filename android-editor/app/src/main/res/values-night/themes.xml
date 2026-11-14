@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Material 3 深色主题（跟随系统夜间模式） -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/m3_surface</item>
+        <item name="android:statusBarColor">@color/m3_surface</item>
+        <item name="android:navigationBarColor">@color/m3_surface</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">@color/m3_primary</item>
+        <item name="android:alertDialogTheme">@style/AppDialog</item>
+        <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
+    </style>
+
+    <style name="AppDialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:background">@drawable/m3_dialog</item>
+        <item name="android:colorAccent">@color/m3_primary</item>
+        <item name="android:textColorPrimary">@color/m3_on_surface</item>
+        <item name="android:textColorSecondary">@color/m3_on_surface_variant</item>
+        <item name="android:buttonBarButtonStyle">@style/M3DialogButton</item>
+    </style>
+
+    <style name="M3DialogButton" parent="@android:style/Widget.Material.Button.Borderless">
+        <item name="android:textColor">@color/m3_primary</item>
+        <item name="android:textAllCaps">false</item>
+    </style>
+</resources>

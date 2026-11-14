@@ -15,3 +15,8 @@ android-editor/local.properties
 android-toolchain/build/
 android-toolchain/.gradle/
 android-toolchain/local.properties
+
+android-console/build/
+android-console/app/build/
+android-console/.gradle/
+android-console/local.properties

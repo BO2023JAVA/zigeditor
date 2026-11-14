@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.Editable;
+import android.text.InputFilter;
 import android.text.TextWatcher;
 import android.view.KeyEvent;
 import android.view.inputmethod.InputMethodManager;
@@ -22,6 +23,7 @@ import android.widget.Toast;
 import com.microui.toolchain.AndroidToolchain;
 import com.microui.toolchain.ApkInstaller;
 import com.microui.toolchain.BuildPipeline;
+import com.microui.toolchain.BuildProfile;
 import com.microui.toolchain.ProotRunner;
 import com.microui.toolchain.PackageManager;
 
@@ -40,12 +42,17 @@ public class TerminalActivity extends Activity {
     /** 从编辑器侧滑栏进入时带上项目目录：默认进入后自动编译，false 时只 cd 到项目目录。 */
     public static final String EXTRA_PROJECT_DIR = "extra_project_dir";
     public static final String EXTRA_AUTO_COMPILE = "extra_auto_compile";
+    /** 原生 zig 项目专用：会话起来后在项目目录里直接执行这条命令（如 zig build run），不打包。 */
+    public static final String EXTRA_RUN_CMD = "extra_run_cmd";
 
     /** 终端提示符；pRoot 用于容器内，pHost 用于宿主 shell 回退。 */
     private static final String PROMPT_PROOT = "root@ubuntu:~# ";
     private static final String PROMPT_HOST = "host:~$ ";
     /** 命令结束标记：bash/sh 执行完打印它，用来知道何时该显示新提示符。 */
     private static final String CMD_DONE = "__MICROUI_DONE__";
+    /** 结束标记整行：CMD_DONE + 退出码 + | + pwd + 可选换行。 */
+    private static final java.util.regex.Pattern DONE_MARK = java.util.regex.Pattern.compile(
+            java.util.regex.Pattern.quote(CMD_DONE) + "([^|\\n]*)\\|([^\\n]*)\\n?");
 
     /** SGR 颜色序列（ESC[...m）与其它 CSI（清屏/光标等）解析用。 */
     private static final java.util.regex.Pattern SGR =
@@ -65,7 +72,9 @@ public class TerminalActivity extends Activity {
     private EditText screen;
     private TextView env;
     private String promptText = PROMPT_PROOT;
-    private boolean suppress;
+    private volatile boolean suppress;
+    /** 只读区末尾：框架打印的内容不能被退格/删除越过，用户只能编辑这之后的输入行。 */
+    private volatile int lockedEnd;
     private long lastSubmitAt;
     private TerminalSession session;
     /** 最近一次发给 shell 的完整命令行，用于丢弃 bash 的回显行（避免命令重复 + 提示符多打印）。 */
@@ -76,6 +85,9 @@ public class TerminalActivity extends Activity {
     private File autoCompileDir;
     /** 会话启动后先执行的命令（从项目进入时 cd 到项目目录）。 */
     private String pendingCd;
+    private boolean pendingRun;
+    /** 下一条结束标记是否需要在终端显示命令退出码。 */
+    private volatile boolean reportDone;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -95,10 +107,22 @@ public class TerminalActivity extends Activity {
         // 从编辑器进入：编译模式（默认）或纯终端模式（cd 到项目目录）
         String proj = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         boolean autoBuild = getIntent().getBooleanExtra(EXTRA_AUTO_COMPILE, true);
+        String runCmd = getIntent().getStringExtra(EXTRA_RUN_CMD);
         if (proj != null) {
             File dir = new File(proj);
             if (dir.isDirectory()) {
-                if (autoBuild) {
+                if (runCmd != null) {
+                    // 不打包，进项目目录后直接执行配置的命令，输出看终端
+                    if (ProotRunner.abiSupportHint(this).isEmpty()) {
+                        pendingCd = "cd '/projects/" + dir.getName().replace("'", "'\\''")
+                                + "' && " + runCmd;
+                        pendingRun = true;
+                        append("[执行中] " + runCmd + "\n");
+                    } else {
+                        screen.postDelayed(() -> log("\n[运行] 当前设备无法运行 proot，"
+                                + "请在 ABI 匹配的设备上编译运行"), 400);
+                    }
+                } else if (autoBuild) {
                     autoCompileDir = dir;
                     screen.postDelayed(() -> autoCompileProject(dir), 400);
                 } else if (ProotRunner.abiSupportHint(this).isEmpty()) {
@@ -152,32 +176,53 @@ public class TerminalActivity extends Activity {
     // ---------------------------------------------------------------- 内置资源
 
     /**
-     * GUI 框架源码和运行时模板 APK 已随编辑器内置（assets/bundled），首次进入释放到
-     * files/microui 下：template.apk（重打包基底）和 projects/microui-template（编译源）。
+     * 内置资源首次释放到 files/microui：
+     *   template.apk / template-console.apk  两种项目各自的运行时模板 APK
+     *   projects/microui-template            GUI 框架源码（终端里的内置示例）
+     *   projects/console-template            纯终端示例源码
      * 已存在则跳过；用户删了文件时重进终端会自动补回。
      */
     private void ensureBundled() {
         new Thread(() -> {
             try {
                 File root = new File(getFilesDir(), "microui");
-                File tpl = new File(root, "template.apk");
-                if (!tpl.isFile()) {
-                    log("[内置] 释放模板 APK → " + tpl);
-                    copyAsset("bundled/template.apk", tpl);
-                }
-                File fw = new File(new File(root, "projects"), "microui-template");
-                if (!new File(fw, "demo.zig").isFile()) {
-                    log("[内置] 释放 GUI 框架源码 → " + fw);
-                    fw.mkdirs();
-                    String[] names = getAssets().list("bundled/microui-template");
-                    if (names != null)
-                        for (String n : names)
-                            copyAsset("bundled/microui-template/" + n, new File(fw, n));
-                }
+                File projects = new File(root, "projects");
+                releaseAsset("bundled/template.apk", new File(root, "template.apk"));
+                releaseAsset("bundled/template-console.apk", new File(root, "template-console.apk"));
+                releaseDir("bundled/template-gui",
+                        new File(projects, "microui-template"), "core/demo.zig");
+                releaseDir("bundled/template-console",
+                        new File(projects, "console-template"), "core/main.zig");
             } catch (IOException e) {
                 log("[内置资源释放失败] " + e.getMessage());
             }
         }, "bundled").start();
+    }
+
+    /** 释放单个内置文件（目标已存在则跳过）。 */
+    private void releaseAsset(String asset, File dst) throws IOException {
+        if (dst.isFile()) return;
+        log("[内置] 释放 → " + dst);
+        copyAsset(asset, dst);
+    }
+
+    /** 递归释放内置源码模板（marker 存在说明已释放过）。 */
+    private void releaseDir(String asset, File dir, String marker) throws IOException {
+        if (new File(dir, marker).isFile()) return;
+        log("[内置] 释放模板源码 → " + dir);
+        copyAssetDir(asset, dir);
+    }
+
+    private void copyAssetDir(String asset, File dir) throws IOException {
+        String[] names = getAssets().list(asset);
+        if (names == null) return;
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("无法创建目录: " + dir);
+        for (String n : names) {
+            String child = asset + "/" + n;
+            String[] sub = getAssets().list(child);
+            if (sub != null && sub.length > 0) copyAssetDir(child, new File(dir, n));
+            else copyAsset(child, new File(dir, n));
+        }
     }
 
     private void copyAsset(String asset, File dst) throws IOException {
@@ -239,6 +284,7 @@ public class TerminalActivity extends Activity {
         hostShell = false;
         try {
             session = TerminalSession.start(ProotRunner.terminal(this), listener());
+            sendUmask(session);
             sendPendingCd(session);
         } catch (IOException e) {
             pendingCd = null;
@@ -282,12 +328,25 @@ public class TerminalActivity extends Activity {
         ctrlKey.setTextColor(ctrlArmed ? 0xFF4FC1FF : 0xFF8AB4F8);
     }
 
-    /** 当前输入行（最后一个提示符之后）的起始下标。 */
+    /** 当前输入行的起始下标（框架最后一次打印之后的位置）。 */
     private int inputStart() {
-        String all = screen.getText().toString();
-        int p = all.lastIndexOf(promptText);
-        return p >= 0 ? p + promptText.length() : 0;
+        return Math.max(0, Math.min(lockedEnd, screen.length()));
     }
+
+    /**
+     * 只读区保护：提示符和历史输出不能被退格/删除改掉。
+     * 真终端里退格只会删当前输入行，这里用 InputFilter 把编辑操作限制在 lockedEnd 之后：
+     * 完全落在只读区的删除/替换原样返回（等于不生效），跨边界时只保留只读部分。
+     */
+    private final InputFilter readOnlyGuard = (source, start, end, dest, dstart, dend) -> {
+        if (suppress) return null;   // 程序自己改屏幕（输出/清屏/历史回填）不受限制
+        int lock = Math.min(lockedEnd, dest.length());
+        int ds = Math.min(dstart, dend);
+        int de = Math.max(dstart, dend);
+        if (ds >= lock) return null;                      // 输入行内：正常编辑
+        if (de <= lock) return dest.subSequence(ds, de);  // 只读区：保持原样
+        return dest.subSequence(ds, lock).toString() + source; // 跨边界：保留只读部分
+    };
 
     private void insertAtCursor(String s) {
         Editable e = screen.getText();
@@ -360,11 +419,28 @@ public class TerminalActivity extends Activity {
         Toast.makeText(this, tip, Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * su 模式下 shell 以 root 运行，默认 umask 077：终端里写的文件（zig init、mkdir 等）
+     * 全是 600/700 root 私有，回到编辑器 app 自己反而读不了、列不出。
+     * 会话起来先静默修正：umask 022，并修复历史遗留的 root 私有文件。
+     */
+    private void sendUmask(TerminalSession s) {
+        final String line = "umask 022; chmod -R a+rwX /projects 2>/dev/null";
+        lastSentEcho = line;
+        try {
+            s.send(line);
+        } catch (IOException e) {
+            log("发送失败：" + e.getMessage());
+        }
+    }
+
     /** 启动后先 cd 到项目目录；带结束标记，执行完由监听回调打印提示符。 */
     private void sendPendingCd(TerminalSession s) {
         if (pendingCd == null) return;
-        String line = pendingCd + "; printf '" + CMD_DONE + "\\n'";
+        String line = pendingCd + "; printf '" + CMD_DONE + "%s|%s\\n' \"$?\" \"$PWD\"";
         pendingCd = null;
+        reportDone = pendingRun;
+        pendingRun = false;
         lastSentEcho = line;
         try {
             s.send(line);
@@ -382,33 +458,70 @@ public class TerminalActivity extends Activity {
                 // 提示符也被打印两次（回显行里的标记同样触发 done）
                 text = dropEcho(text);
                 if (text.isEmpty()) return;
-                // proot 在 x86 模拟器翻译层下的典型失败：给出归因，避免被误认为 rootfs 缺 bash
-                if (!abiHintShown && text.contains("ptrace(TRACEME)")) {
-                    abiHintShown = true;
-                    String hint = ProotRunner.abiSupportHint(TerminalActivity.this);
-                    if (hint.isEmpty()) {
-                        // ABI 匹配仍被拒：app 域禁止 ptrace，需要 root 域（模拟器开 ROOT）
-                        hint = ProotRunner.suAvailable()
-                                ? "已用 su(root) 执行 proot 仍被拒：请在模拟器设置里确认 ROOT 权限已开启，"
-                                  + "关闭「SELinux 强制」后重启模拟器"
-                                : "系统禁止 ptrace：请在模拟器/手机设置里开启 ROOT（su），"
-                                  + "或改用 arm64 真机运行";
-                    }
-                    append("[诊断] " + hint + "\n");
+                // 读线程收到数据，渲染统一切回 UI 线程，避免跨线程改 EditText
+                final boolean done = text.contains(CMD_DONE);
+                // 结束标记同时带回退出码和真实 pwd：前者反馈执行结果，后者驱动提示符。
+                String exitCode = null;
+                String pwd = null;
+                java.util.regex.Matcher dm = DONE_MARK.matcher(text);
+                StringBuffer sb = new StringBuffer(text.length());
+                while (dm.find()) {
+                    String code = dm.group(1).trim();
+                    String p = dm.group(2).trim();
+                    if (!code.isEmpty()) exitCode = code;
+                    if (!p.isEmpty()) pwd = p;
+                    dm.appendReplacement(sb, "");
                 }
-                boolean done = text.contains(CMD_DONE);
-                String t = text.replace(CMD_DONE + "\n", "").replace(CMD_DONE, "");
-                if (!t.isEmpty()) appendOutput(t);
-                if (done) append(promptText);
+                dm.appendTail(sb);
+                final String body = sb.toString();
+                final String newPwd = pwd;
+                final String resultCode = exitCode;
+                final boolean report = done && reportDone;
+                if (done) reportDone = false;
+                final String hint = ptraceHint(text);
+                runOnUiThread(() -> {
+                    if (newPwd != null) promptText = makePrompt(newPwd);
+                    if (hint != null) append("[诊断] " + hint + "\n");
+                    if (!body.isEmpty()) appendOutput(body);
+                    if (report && resultCode != null) {
+                        append(("0".equals(resultCode) ? "[完成] 退出码 0\n"
+                                : "[失败] 退出码 " + resultCode + "\n"));
+                    }
+                    if (done) append(promptText);
+                });
             }
             @Override public void onExit(int code) {
-                append("\n[会话结束 code=" + code + "]\n" + promptText);
+                runOnUiThread(() -> append("\n[会话结束 code=" + code + "]\n" + promptText));
             }
         };
     }
 
+    /** 用 shell 回报的真实路径生成提示符（~ 代表 /root）；宿主回退壳用 host 前缀。 */
+    private String makePrompt(String pwd) {
+        String disp = pwd;
+        if ("/root".equals(pwd)) disp = "~";
+        else if (pwd.startsWith("/root/")) disp = "~" + pwd.substring(6);
+        return hostShell ? "host:" + disp + "$ " : "root@ubuntu:" + disp + "# ";
+    }
+
+    /** proot 在 x86 模拟器翻译层下的典型失败：给出归因，避免被误认为 rootfs 缺 bash。只提示一次。 */
+    private String ptraceHint(String text) {
+        if (abiHintShown || !text.contains("ptrace(TRACEME)")) return null;
+        abiHintShown = true;
+        String hint = ProotRunner.abiSupportHint(this);
+        if (!hint.isEmpty()) return hint;
+        // ABI 匹配仍被拒：app 域禁止 ptrace，需要 root 域（模拟器开 ROOT）
+        return ProotRunner.suAvailable()
+                ? "已用 su(root) 执行 proot 仍被拒：请在模拟器设置里确认 ROOT 权限已开启，"
+                  + "关闭「SELinux 强制」后重启模拟器"
+                : "系统禁止 ptrace：请在模拟器/手机设置里开启 ROOT（su），"
+                  + "或改用 arm64 真机运行";
+    }
+
     /** 屏幕即终端：回车提交当前提示符后的内容。 */
     private void setupScreen() {
+        // 只读区保护：退格/删除只能作用在最后一次输出之后的输入行
+        screen.setFilters(new InputFilter[]{readOnlyGuard});
         screen.setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
                 submitLine();
@@ -465,7 +578,29 @@ public class TerminalActivity extends Activity {
         suppress = true;
         screen.append(text);
         suppress = false;
+        // 刚打印的内容变为只读，输入行从末尾重新开始
+        lockedEnd = screen.length();
+        trimScreen();
         screen.post(() -> screen.setSelection(screen.length()));
+    }
+
+    /** 屏幕最多保留的字符数；超出后从最前面按行裁掉，避免长时间输出拖慢布局。 */
+    private static final int MAX_SCREEN_CHARS = 200_000;
+
+    private void trimScreen() {
+        int over = screen.length() - MAX_SCREEN_CHARS;
+        if (over <= 0) return;
+        // 一次多裁 2 万字符，摊薄删除带来的整体搬移开销
+        int from = over + 20_000;
+        CharSequence text = screen.getText();
+        int nl = android.text.TextUtils.indexOf(text, '\n', from);
+        int cut = nl >= 0 ? nl + 1 : Math.min(from, screen.length());
+        cut = Math.min(cut, Math.min(lockedEnd, screen.length())); // 不切当前输入行
+        if (cut <= 0) return;
+        suppress = true;
+        screen.getText().delete(0, cut);
+        suppress = false;
+        lockedEnd = Math.max(0, lockedEnd - cut);
     }
 
     /**
@@ -484,6 +619,7 @@ public class TerminalActivity extends Activity {
             suppress = true;
             screen.setText("");
             suppress = false;
+            lockedEnd = 0;
             text = text.replace("\u001B[2J", "").replace("\u001B[3J", "")
                     .replace("\u001B[H", "");
             if (text.isEmpty()) return;
@@ -501,6 +637,9 @@ public class TerminalActivity extends Activity {
         suppress = true;
         screen.append(sb);
         suppress = false;
+        // 输出同样是只读区，输入行从末尾重新开始
+        lockedEnd = screen.length();
+        trimScreen();
         screen.post(() -> screen.setSelection(screen.length()));
     }
 
@@ -553,9 +692,13 @@ public class TerminalActivity extends Activity {
         promptText = hostShell ? PROMPT_HOST : PROMPT_PROOT;
         try {
             // 无 TTY 时 bash 不会自己输出 PS1，用结束标记判断何时打印新提示符
-            String line = cmd + "; printf '" + CMD_DONE + "\\n'";
+            String line = cmd + "; printf '" + CMD_DONE + "%s|%s\\n' \"$?\" \"$PWD\"";
             lastSentEcho = line;          // 记住原文，用于过滤 shell 的回显行
+            reportDone = true;
             session.send(line);
+            if (cmd.startsWith("zig ")) {
+                append("[执行中] Zig 首次编译可能需要等待，完成后会显示退出码。\n");
+            }
             history.add(cmd);             // ↑/↓ 可翻回来
             historyIndex = history.size();
         } catch (IOException e) {
@@ -584,6 +727,7 @@ public class TerminalActivity extends Activity {
     /** 编辑器侧滑栏跳入：直接对指定项目走完整编译 + 打包安装流程。 */
     private void autoCompileProject(File dir) {
         if (dir != autoCompileDir) return; // 防御：只响应本次 intent
+        if ("native".equals(readKind(dir))) { runNativeSoBuild(dir); return; }
         if (!ProotRunner.abiSupportHint(this).isEmpty()) {
             log("\n[编译] 当前设备无法运行 proot，项目编译请在 arm64 真机上进行：" + dir.getName());
             return;
@@ -592,31 +736,33 @@ public class TerminalActivity extends Activity {
         runBuild(dir);
     }
 
-    /** 编译 GUI 项目（projectDir 为 null 时用内置 microui-template）→ 重打包 → 安装。 */
+    /** 按项目配方编译（projectDir 为 null 时用内置 GUI 示例）→ 重打包 → 安装。 */
     private void runBuild(File projectDir) {
         File root = new File(getFilesDir(), "microui");
         final File src = projectDir != null ? projectDir : new File(new File(root, "projects"), "microui-template");
         final File out = new File(root, "out");
         final File sdl = new File(root, "sdl");
-        final File template = ProotRunner.templateApk(this);
+        final BuildProfile profile = BuildProfile.of(src);
+        final File template = new File(root, profile.templateFile);
 
-        if (!new File(src, "framework/demo.zig").isFile() && !new File(src, "demo.zig").isFile()) {
-            log("\n不是 GUI 项目（缺 framework/demo.zig）：" + src
-                    + "\n新建项目时会自动带上 GUI 模板结构，或清除应用数据后重进终端补回内置模板");
+        if (!profile.entryExists(src)) {
+            log("\n不是" + profile.displayName + "项目（缺 " + profile.entry + "）：" + src
+                    + "\n新建项目时会按所选类型带上模板结构，或清除应用数据后重进终端补回内置模板");
             append(promptText);
             return;
         }
         String zigVer = ProotRunner.zigCurrentId(this);
-        log("\n=== 开始编译（proot Ubuntu + " + (zigVer.isEmpty() ? "zig 默认包" : zigVer) + "） ===");
+        log("\n=== 开始编译（" + profile.displayName + " · proot Ubuntu + "
+                + (zigVer.isEmpty() ? "zig 默认包" : zigVer) + "） ===");
         new Thread(() -> {
             try {
-                if (!new File(sdl, "libSDL3.so").isFile()) {
+                if (profile.needsSdl && !new File(sdl, "libSDL3.so").isFile()) {
                     if (!template.isFile())
                         throw new IOException("缺少内置模板 APK：" + template + "\n（清除应用数据后重进终端会自动从 APK 内置资源补回）");
                     log("从模板 APK 提取 SDL3 库 → " + sdl);
                     ProotRunner.extractSdlLibs(template, sdl);
                 }
-                ProcessBuilder pb = ProotRunner.buildLib(this, src, out, sdl, src);
+                ProcessBuilder pb = ProotRunner.buildLib(this, src, out, sdl, profile);
                 int code = pipe(pb);
                 File so = new File(out, "libmicrozig.so");
                 if (!so.isFile()) {
@@ -632,6 +778,97 @@ public class TerminalActivity extends Activity {
                 runOnUiThread(() -> append(promptText));
             }
         }, "build").start();
+    }
+
+    /** 读项目 config.json 的 kind（gui/console/native）；读不到按空串。 */
+    private static String readKind(File dir) {
+        File f = new File(dir, "config.json");
+        if (!f.isFile()) f = new File(dir, "microui.json");
+        try {
+            if (f.isFile()) {
+                String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        StandardCharsets.UTF_8);
+                return new org.json.JSONObject(s).optString("kind", "");
+            }
+        } catch (Exception ignored) { }
+        return "";
+    }
+
+    /**
+     * 原生 zig 项目（侧滑栏「编译打包」）：把 src/root.zig 编译成独立 .so
+     * （musl 静态链接，不依赖系统 libc，安卓上可直接 dlopen），并导出到系统「下载/Download」。
+     * 运行请用编辑页右上角「▶」（在终端里 zig build run）。
+     */
+    private void runNativeSoBuild(File dir) {
+        if (!ProotRunner.abiSupportHint(this).isEmpty()) {
+            log("\n[编译] 当前设备无法运行 proot，原生 zig 编译请在 arm64 真机上进行：" + dir.getName());
+            append(promptText);
+            return;
+        }
+        if (!new File(dir, "src/root.zig").isFile()) {
+            log("\n不是原生 zig 项目（缺 src/root.zig）：" + dir
+                    + "\n新建项目时选「原生zig」会带上 build.zig + src/ 结构");
+            append(promptText);
+            return;
+        }
+        String zigVer = ProotRunner.zigCurrentId(this);
+        log("\n=== 编译动态库（原生 zig → .so · proot Ubuntu + "
+                + (zigVer.isEmpty() ? "zig 默认包" : zigVer) + "） ===");
+        final String soName = "lib" + dir.getName().replaceAll("[^A-Za-z0-9_]", "_") + ".so";
+        new Thread(() -> {
+            try {
+                File so = new File(new File(dir, "zig-out"), soName);
+                int code = pipe(ProotRunner.buildNativeLib(this, dir, so));
+                if (code != 0 || !so.isFile()) {
+                    log("[编译失败] exit=" + code + "，未生成 " + so);
+                    return;
+                }
+                log("[编译成功] " + so + "  " + PackageManager.fmtBytes(so.length()));
+                exportToDownloads(so);
+            } catch (Exception e) {
+                log("[异常] " + e);
+            } finally {
+                runOnUiThread(() -> append(promptText));
+            }
+        }, "build-so").start();
+    }
+
+    /** 把 .so 复制到系统「下载/Download」（API29+ 走 MediaStore 免权限；低版本退回应用外部目录）。 */
+    private void exportToDownloads(File so) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                android.content.ContentValues v = new android.content.ContentValues();
+                v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, so.getName());
+                v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
+                android.net.Uri uri = getContentResolver().insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (uri != null) {
+                    try (java.io.OutputStream out = getContentResolver().openOutputStream(uri);
+                         java.io.FileInputStream in = new java.io.FileInputStream(so)) {
+                        byte[] buf = new byte[65536];
+                        int k;
+                        while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+                    }
+                    log("[导出] 已保存到 下载/Download：" + uri);
+                    return;
+                }
+            } catch (Exception e) {
+                log("[导出] MediaStore 失败：" + e.getMessage());
+            }
+        }
+        // 退回应用专属外部目录（无需权限），把真实路径告诉用户
+        File ext = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+        if (ext == null) { log("[导出] 无可用外部存储"); return; }
+        File dst = new File(ext, so.getName());
+        try (java.io.FileInputStream in = new java.io.FileInputStream(so);
+             java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
+            byte[] buf = new byte[65536];
+            int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+            log("[导出] 已保存到 " + dst.getAbsolutePath());
+        } catch (IOException e) {
+            log("[导出] " + e.getMessage());
+        }
     }
 
     /** 同步跑一个进程并把合并输出打到界面，返回 exit code。 */

@@ -264,8 +264,7 @@ pub fn init(title: [:0]const u8, _: c_int, _: c_int) void {
         inset_top = @as(f32, @floatFromInt(safe.y)) / density;
         diagLog("safe area y={d} h={d} -> inset_top={d}dp", .{ safe.y, safe.h, @as(i32, @intFromFloat(inset_top)) });
     }
-    // 开启文本输入：Android 上会唤起系统输入法（IME），输入框才能打字
-    _ = sdl.startTextInput(window);
+    // 文本输入（IME）由文本框聚焦驱动，见 frameEnd / setTextInputArea
 
     // 把 128x128 的 alpha 位图打包成 RGBA
     var rgba: [atlas.W * atlas.H * 4]u8 = undefined;
@@ -441,31 +440,48 @@ pub fn poll(ctx: *microui.Context) bool {
     return false;
 }
 
-/// 帧末钩子：保持文本输入激活（SDL3 的 SDL_SendKeyboardText 只在
-/// text_input_active 为真才派发 TEXT_INPUT，否则 IME 提交的中文被丢弃）。
-/// 窗口 softInputMode 已配 stateHidden，不会导致启动就弹键盘。
+/// 文本输入（IME）状态：只在有文本框聚焦时打开，失焦后关掉。
+/// 注意 SDL3 Android 的 SDL_StartTextInput 会直接拉起系统键盘，不能每帧调用，
+/// 否则用户按返回键收起的键盘会在下一帧又被弹出（表现为「输入法一直弹」）。
+var ime_open = false;
+/// 本帧是否有文本框聚焦（由 setTextInputArea 每帧打点）
+var ime_focused = false;
+
+/// 帧末钩子：本帧没有文本框聚焦就收起 IME。
+/// SDL3 的 SDL_SendKeyboardText 只在 text input active 时派发 TEXT_INPUT，
+/// 聚焦期间由 setTextInputArea 保持激活，失焦后在这里关闭。
 pub fn frameEnd() void {
-    _ = sdl.startTextInput(window);
+    if (!ime_focused and ime_open) {
+        ime_open = false;
+        sdl.stopTextInput(window);
+    }
+    ime_focused = false;
 }
 
-/// 确保文本输入激活（SDL_SendKeyboardText 依赖 text_input_active 才发 TEXT_INPUT）。
-/// 幂等：active 已置位后内部不再重复动作；窗口配了 stateHidden 不会弹键盘。
+/// 确保文本输入激活（给没有输入框、但要自己接收 IME 文本的应用用）。
 pub fn ensureTextInput() void {
-    _ = sdl.startTextInput(window);
+    ime_focused = true;
+    if (!ime_open) {
+        ime_open = true;
+        _ = sdl.startTextInput(window);
+    }
 }
 
 /// textbox 聚焦回调：拉起系统 IME 并设置输入框矩形。
-/// SDL3 Android 上 StartTextInput 配合 SDL_ENABLE_SCREEN_KEYBOARD hint 才会弹键盘；
 /// 坐标是逻辑坐标（与渲染一致），SDL 用它定位输入法候选窗。
-/// 注意：focus 保持期间 textboxRaw 每帧都调本回调，若每次都 requestFocus+showSoftInput，
-/// 前一次的 IME 动画会被后一次取消（logcat 可见 onCancelled）。故按坐标变化防抖。
+/// focus 保持期间 textboxRaw 每帧都调本回调：键盘只在首次聚焦（或失焦后再次聚焦）时拉起，
+/// 矩形按坐标变化防抖，避免每帧 showSoftInput 把 IME 动画取消掉。
 var last_ime_rect: [4]i32 = .{ 0, 0, 0, 0 };
 var last_ime_valid = false;
 pub fn setTextInputArea(_: *microui.Context, x: i32, y: i32, w: i32, h: i32) void {
+    ime_focused = true;
+    if (!ime_open) {
+        ime_open = true;
+        _ = sdl.startTextInput(window);
+    }
     if (last_ime_valid and last_ime_rect[0] == x and last_ime_rect[1] == y and last_ime_rect[2] == w and last_ime_rect[3] == h) return;
     last_ime_rect = .{ x, y, w, h };
     last_ime_valid = true;
-    _ = sdl.startTextInput(window);
     // microui 给的是 dp 坐标，SDL 需要物理像素
     const r = sdl.SDL_Rect{
         .x = @intFromFloat(@as(f32, @floatFromInt(x)) * density),

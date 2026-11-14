@@ -120,11 +120,6 @@ public final class ProotRunner {
         return new File(microuiRoot(c), "projects");
     }
 
-    /** 模板 APK：随编辑器 APK 内置（assets/bundled），首次进入终端时释放到这里。 */
-    public static File templateApk(Context c) {
-        return new File(microuiRoot(c), "template.apk");
-    }
-
     /** 四个 native 文件是否齐全（用来在 UI 上给出明确缺失提示）。 */
     public static String missingBinaries(Context c) {
         List<String> missing = new ArrayList<>();
@@ -150,8 +145,10 @@ public final class ProotRunner {
         zigProjects.mkdirs();
         List<String> binds = new ArrayList<>();
         binds.add(zigProjects.getAbsolutePath() + ":/projects");
-        // --noediting：关掉 readline，否则无 TTY 时它会把读入的命令行回显到输出
-        return base(c, binds, Arrays.asList("/bin/bash", "--norc", "--noediting", "-i"));
+        // 不加 -i：管道 stdin 照样逐条执行且保持 shell 状态（cd/变量），
+        // 同时避免无 TTY 下交互模式的两行警告
+        // "cannot set terminal process group ... / no job control in this shell"。
+        return base(c, binds, Arrays.asList("/bin/bash", "--norc"));
     }
 
     /**
@@ -171,11 +168,12 @@ public final class ProotRunner {
     }
 
     /**
-     * 在 rootfs 内编译出 libmicrozig.so。
+     * 在 rootfs 内按构建配方编译出 libmicrozig.so。
      * 源码目录通过 -b 挂到 /work，输出目录挂到 /out，SDL 的两个 .so 挂到 /sdl。
+     * 模块列表、依赖与链接库全部来自 {@link BuildProfile}，这里只负责拼命令行。
      */
     public static ProcessBuilder buildLib(Context c, File srcDir, File outDir, File sdlDir,
-                                          File frameworkDir) throws IOException {
+                                          BuildProfile profile) throws IOException {
         // proot 绑定要求宿主目录已存在，否则 "can't sanitize binding" 并静默忽略
         srcDir.mkdirs();
         outDir.mkdirs();
@@ -185,23 +183,44 @@ public final class ProotRunner {
         binds.add(srcDir.getAbsolutePath() + ":/work");
         binds.add(outDir.getAbsolutePath() + ":/out");
         binds.add(sdlDir.getAbsolutePath() + ":/sdl");
-        if (frameworkDir.isDirectory()) binds.add(frameworkDir.getAbsolutePath() + ":/framework");
 
-        // 新项目把框架放在 framework/ 下，用户代码 app.zig 留在根目录；旧项目仍是平铺结构
-        String pre = new File(srcDir, "framework/demo.zig").isFile() ? "framework/" : "";
-        String script = "set -e; cd /work; "
+        StringBuilder cmd = new StringBuilder("umask 022; set -e; cd /work; "
                 + "mkdir -p /out /tmp/zc /tmp/zgc; "
                 + "/opt/zig/zig build-lib -dynamic -fstrip -O ReleaseSmall -target aarch64-linux-android "
-                + "--name microzig --dep microui --dep microui_app --dep app \"-Mroot=" + pre + "demo.zig\" "
-                + "\"-Mmicroui=" + pre + "microui.zig\" --dep microui --dep sdl3_android \"-Mbackend=" + pre + "renderer_android.zig\" "
-                + "\"-Msdl3_android=" + pre + "sdl3_android.zig\" --dep microui --dep backend \"-Mmicroui_app=" + pre + "microui_app.zig\" "
-                + "--dep microui --dep microui_app \"-Mapp=app.zig\" "
-                + "/sdl/libSDL3.so /sdl/libSDL3_ttf.so \"-femit-bin=/out/libmicrozig.so\" "
-                + "--cache-dir /tmp/zc --global-cache-dir /tmp/zgc; "
+                + "--name microzig");
+        for (BuildProfile.Module m : profile.modules) {
+            for (String dep : m.deps) cmd.append(" --dep ").append(dep);
+            cmd.append(" \"-M").append(m.name).append('=').append(m.path).append('"');
+        }
+        for (String lib : profile.libs) cmd.append(' ').append(lib);
+        cmd.append(" \"-femit-bin=/out/libmicrozig.so\" "
+                + "--cache-dir /tmp/zc --global-cache-dir /tmp/zgc; ")
                 // su 模式下产物属 root，放开读权限，否则 app 进程打包时 AccessDeniedException
-                + "chmod 0644 /out/libmicrozig.so";
+                .append("chmod 0644 /out/libmicrozig.so");
 
-        return base(c, binds, Arrays.asList("/bin/bash", "-c", script));
+        return base(c, binds, Arrays.asList("/bin/bash", "-c", cmd.toString()));
+    }
+
+    /**
+     * 原生 zig 项目：把 src/root.zig 编译成独立动态库（musl 静态链接，不依赖系统 libc，
+     * 因此在 Android bionic 上也能直接 dlopen），产物落在项目 zig-out/ 下。
+     */
+    public static ProcessBuilder buildNativeLib(Context c, File srcDir, File outFile) throws IOException {
+        // proot 绑定要求宿主目录已存在，否则 "can't sanitize binding" 并静默忽略
+        srcDir.mkdirs();
+        File outDir = outFile.getParentFile();
+        outDir.mkdirs();
+
+        List<String> binds = new ArrayList<>();
+        binds.add(srcDir.getAbsolutePath() + ":/work");
+
+        String cmd = "umask 022; set -e; cd /work; mkdir -p /tmp/zc /tmp/zgc; "
+                + "/opt/zig/zig build-lib -dynamic -fstrip -O ReleaseSmall -target aarch64-linux-musl "
+                + "\"-femit-bin=/work/zig-out/" + outFile.getName() + "\" src/root.zig "
+                + "--cache-dir /tmp/zc --global-cache-dir /tmp/zgc; "
+                // su 模式下产物属 root，放开读权限，否则 app 进程导出时 AccessDeniedException
+                + "chmod 0644 \"/work/zig-out/" + outFile.getName() + "\"";
+        return base(c, binds, Arrays.asList("/bin/bash", "-c", cmd));
     }
 
     /** 设备是否有 su：模拟器开了 ROOT / 已 root 真机时，可用 root 域执行 proot 绕过 untrusted_app 的 ptrace 限制。 */

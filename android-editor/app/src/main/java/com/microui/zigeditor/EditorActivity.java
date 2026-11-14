@@ -2,10 +2,13 @@ package com.microui.zigeditor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.Spannable;
+import android.text.SpannableString;
+import android.text.style.ImageSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -48,6 +51,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
 
     private CodeEditor editor;
     private TextView fileName;
+    private View btnUndo, btnRedo;
     private File projectDir;
     private File file;
     private boolean loaded;
@@ -128,7 +132,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         else fileName.setText("未选择文件");
 
         rebuildTree();
-        findViewById(R.id.save_button).setOnClickListener(v -> save(true));
+        setupToolButtons();
 
         if (projectPath != null) {
             // 从项目页进入：自动展开侧滑栏
@@ -137,6 +141,31 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
     }
 
     // ---------------------------------------------------------------- 编辑
+
+    /** 顶部工具按钮：↶ 撤销 / ↷ 重做 / ▶ 编译打包。撤销重做按可用状态置灰。 */
+    private void setupToolButtons() {
+        btnUndo = findViewById(R.id.btn_undo);
+        btnRedo = findViewById(R.id.btn_redo);
+        btnUndo.setOnClickListener(v -> { if (editor.canUndo()) editor.undo(); });
+        btnRedo.setOnClickListener(v -> { if (editor.canRedo()) editor.redo(); });
+        findViewById(R.id.btn_run).setOnClickListener(v -> {
+            String kind = projectKind();
+            String command = runCommand(kind);
+            // APK 内置命令走原有编译、打包、签名、安装流程；其它命令在 Ubuntu 终端执行。
+            if (!"native".equals(kind) && APK_RUN_COMMAND.equals(command)) openTerminal(true);
+            else openTerminalRun(command);
+        });
+        findViewById(R.id.btn_run_menu).setOnClickListener(v -> showRunSettings());
+        editor.subscribeEvent(io.github.rosemoe.sora.event.ContentChangeEvent.class,
+                (event, unsub) -> editor.post(this::updateUndoRedo));
+        updateUndoRedo();
+    }
+
+    private void updateUndoRedo() {
+        if (btnUndo == null || btnRedo == null) return;
+        btnUndo.setEnabled(editor.canUndo());
+        btnRedo.setEnabled(editor.canRedo());
+    }
 
     /** 项目内优先打开 main.zig，其次第一个 .zig。 */
     private File pickInitialFile() {
@@ -357,6 +386,115 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         startActivity(intent);
     }
 
+    private static final String APK_RUN_COMMAND = "zigeditor apk run";
+
+    private static String defaultRunCommand(String kind) {
+        return "native".equals(kind) ? "zig build run" : APK_RUN_COMMAND;
+    }
+
+    private String runCommand(String kind) {
+        String fallback = defaultRunCommand(kind);
+        String command = readProjectConfig().optString("runCommand", fallback).trim();
+        return command.isEmpty() ? fallback : command;
+    }
+
+    /** 运行参数按项目保存；图形/纯终端 APK 共用内置命令，原生项目默认 zig build run。 */
+    private void showRunSettings() {
+        String kind = projectKind();
+        String fallback = defaultRunCommand(kind);
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = dp(20);
+        box.setPadding(pad, dp(8), pad, 0);
+
+        TextView help = new TextView(this);
+        help.setText("默认命令：" + fallback + "\n\n"
+                + APK_RUN_COMMAND + " 是编辑器内置命令，表示编译、打包并安装 APK。"
+                + "填写其它命令时，会在本项目的 Ubuntu 终端中执行，不走 APK 打包流程。");
+        help.setTextColor(getColor(R.color.m3_on_surface_variant));
+        help.setTextSize(13);
+        help.setLineSpacing(0, 1.15f);
+        box.addView(help);
+
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        input.setTypeface(Typeface.MONOSPACE);
+        input.setSingleLine(true);
+        input.setText(runCommand(kind));
+        input.setSelectAllOnFocus(true);
+        input.setHint(fallback);
+        android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(12);
+        box.addView(input, lp);
+
+        new AlertDialog.Builder(this)
+                .setTitle("运行参数")
+                .setView(box)
+                .setPositiveButton("保存", (d, w) -> {
+                    String command = input.getText().toString().trim();
+                    if (command.isEmpty()) {
+                        Toast.makeText(this, "运行命令不能为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    saveRunCommand(command);
+                })
+                .setNeutralButton("恢复默认", (d, w) -> saveRunCommand(fallback))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void saveRunCommand(String command) {
+        File target = new File(projectDir, "config.json");
+        File tmp = new File(projectDir, "config.json.tmp");
+        try {
+            org.json.JSONObject config = readProjectConfig();
+            config.put("runCommand", command);
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(config.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            if (!tmp.renameTo(target)) {
+                try (FileOutputStream out = new FileOutputStream(target)) {
+                    out.write(config.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+                if (tmp.exists()) tmp.delete();
+            }
+            Toast.makeText(this, "运行命令已保存：" + command, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "保存运行命令失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 在终端执行项目运行命令，编译和程序输出都留在终端里。 */
+    private void openTerminalRun(String command) {
+        save(false);
+        android.content.Intent intent = new android.content.Intent(
+                this, com.microui.zigeditor.terminal.TerminalActivity.class);
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_PROJECT_DIR,
+                projectDir.getAbsolutePath());
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_AUTO_COMPILE, false);
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_RUN_CMD, command);
+        startActivity(intent);
+    }
+
+    private org.json.JSONObject readProjectConfig() {
+        try {
+            File f = new File(projectDir, "config.json");
+            if (!f.isFile()) f = new File(projectDir, "microui.json");
+            if (f.isFile()) {
+                String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        StandardCharsets.UTF_8);
+                return new org.json.JSONObject(s);
+            }
+        } catch (Exception ignored) { }
+        return new org.json.JSONObject();
+    }
+
+    /** 读项目 config.json 的 kind（gui/console/native）；读不到按空串（视为旧图形界面项目）。 */
+    private String projectKind() {
+        return readProjectConfig().optString("kind", "");
+    }
+
     /** 长按文件树节点：重命名 / 删除。 */
     private void showNodeMenu(Node n) {
         String[] items = n.dir
@@ -456,7 +594,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
 
     /** 侧滑栏里显示的文件类型（其余二进制/资源文件不列出来，避免误点进编辑器）。 */
     private static final Set<String> TEXT_EXT = new HashSet<>(Arrays.asList(
-            "zig", "json", "md", "txt", "toml", "yaml", "yml", "xml", "ini", "cfg", "conf",
+            "zig", "zon", "json", "md", "txt", "toml", "yaml", "yml", "xml", "ini", "cfg", "conf",
             "sh", "c", "h", "cpp", "hpp", "py", "js", "ts", "html", "css"));
 
     private static boolean isTextFile(File f) {
@@ -562,6 +700,15 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
     }
 
     private final class TreeAdapter extends BaseAdapter {
+        private final ImageSpan zigIconSpan;
+
+        TreeAdapter() {
+            Drawable icon = getDrawable(R.drawable.zig_favicon);
+            int side = dp(16);
+            icon.setBounds(0, 0, side, side);
+            zigIconSpan = new ImageSpan(icon, ImageSpan.ALIGN_BOTTOM);
+        }
+
         @Override public int getCount() { return nodes.size(); }
         @Override public Node getItem(int i) { return nodes.get(i); }
         @Override public long getItemId(int i) { return i; }
@@ -581,12 +728,21 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
             boolean expanded = n.dir && expandedDirs.contains(n.file.getAbsolutePath());
             String arrow = n.dir ? (expanded ? "▾ " : "▸ ") : "   ";
             String icon = n.dir ? (expanded ? "📂" : "📁") : iconFor(n.file.getName());
-            tv.setText(arrow + icon + "  " + n.file.getName());
-            tv.setTextColor(n.dir ? Color.rgb(212, 212, 212) : Color.rgb(200, 200, 200));
+            String rowText = arrow + icon + "  " + n.file.getName();
+            if (!n.dir && "⚡".equals(icon)) {
+                SpannableString text = new SpannableString(rowText);
+                text.setSpan(zigIconSpan, arrow.length(), arrow.length() + icon.length(),
+                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                tv.setText(text);
+            } else {
+                tv.setText(rowText);
+            }
             tv.setPadding(dp(12 + n.depth * 16), 0, dp(12), 0);
-            // 单选高亮：全树只有一个选中项（文件或文件夹），提示「新建」会落在哪里
+            // 单选高亮：M3 导航选中胶囊，同时保证深浅色主题下的文字对比度
             boolean selected = n.file.equals(selectedNode);
-            tv.setBackgroundColor(selected ? Color.rgb(9, 71, 113) : Color.TRANSPARENT);
+            tv.setTextColor(getColor(selected ? R.color.m3_on_primary_container
+                    : n.dir ? R.color.m3_on_surface : R.color.m3_on_surface_variant));
+            tv.setBackgroundResource(selected ? R.drawable.m3_nav_indicator : 0);
             return tv;
         }
     }

@@ -2,14 +2,18 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/m3_surface"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:paddingStart="16dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="16dp">
 
     <TextView
         android:id="@+id/pkg_status"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="加载仓库索引..."
+        android:textColor="@color/m3_on_surface_variant"
         android:textSize="12sp" />
 
     <ProgressBar
@@ -23,39 +27,65 @@
         android:id="@+id/pkg_list"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="8dp"
+        android:listSelector="@android:color/transparent" />
 
     <TextView
         android:id="@+id/pkg_disk"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:paddingTop="4dp"
+        android:textColor="@color/m3_on_surface_variant"
         android:textSize="12sp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="8dp"
         android:orientation="horizontal">
 
         <Button
             android:id="@+id/pkg_repo"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
-            android:text="下载源" />
+            android:background="@drawable/m3_button_tonal"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:stateListAnimator="@null"
+            android:text="下载源"
+            android:textAllCaps="false"
+            android:textColor="@color/m3_on_secondary_container" />
 
         <Button
             android:id="@+id/pkg_import"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
-            android:text="本地导入" />
+            android:background="@drawable/m3_button_tonal"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:stateListAnimator="@null"
+            android:text="本地导入"
+            android:textAllCaps="false"
+            android:textColor="@color/m3_on_secondary_container" />
 
         <Button
             android:id="@+id/pkg_refresh"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="刷新" />
+            android:background="@drawable/m3_button_tonal"
+            android:foreground="?android:attr/selectableItemBackground"
+            android:stateListAnimator="@null"
+            android:text="刷新"
+            android:textAllCaps="false"
+            android:textColor="@color/m3_on_secondary_container" />
     </LinearLayout>
 
 </LinearLayout>
