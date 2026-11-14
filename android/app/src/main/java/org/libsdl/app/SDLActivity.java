@@ -804,6 +804,17 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         }
 
         int keyCode = event.getKeyCode();
+
+        // SDLSurface 会把返回键当普通按键消费，导致 Activity.onBackPressed() 不会执行。
+        // 未启用 SDL 返回键捕获时，在分发给 View 之前执行默认退出行为。
+        if (keyCode == KeyEvent.KEYCODE_BACK &&
+            !SDLActivity.nativeGetHintBoolean("SDL_ANDROID_TRAP_BACK_BUTTON", false)) {
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                onBackPressed();
+            }
+            return true;
+        }
+
         // Ignore certain special keys so they're handled by Android
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
             keyCode == KeyEvent.KEYCODE_VOLUME_UP ||

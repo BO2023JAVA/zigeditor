@@ -38,6 +38,15 @@ public class SDLDummyEdit extends View implements View.OnKeyListener
     //
     @Override
     public boolean onKeyPreIme (int keyCode, KeyEvent event) {
+        // 输入法显示时返回键不会进入 Activity.dispatchKeyEvent()，必须在 IME 前处理。
+        if (keyCode == KeyEvent.KEYCODE_BACK &&
+            !SDLActivity.nativeGetHintBoolean("SDL_ANDROID_TRAP_BACK_BUTTON", false)) {
+            if (event.getAction() == KeyEvent.ACTION_UP &&
+                SDLActivity.mSingleton != null && !SDLActivity.mSingleton.isFinishing()) {
+                SDLActivity.mSingleton.onBackPressed();
+            }
+            return true;
+        }
         // As seen on StackOverflow: http://stackoverflow.com/questions/7634346/keyboard-hide-event
         // FIXME: Discussion at http://bugzilla.libsdl.org/show_bug.cgi?id=1639
         // FIXME: This is not a 100% effective solution to the problem of detecting if the keyboard is showing or not
