@@ -33,6 +33,22 @@ cd android-editor
 
 验证报告与镜像地址见 [POC-REPORT.md](android-toolchain/POC-REPORT.md)。
 
+## Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=BO2023JAVA/zigeditor&type=Date)](https://star-history.com/#BO2023JAVA/zigeditor&Date)
+
+## 支持作者
+
+作者真的喜欢 Zig，目前正在为 Zig 社区贡献一份力。如果你觉得这个项目有用，
+欢迎请作者喝杯咖啡 ☕。
+
+微信捐助二维码：
+
+![lovezig](docs/lovezig.png)
+
+- 作者：鲲宝
+- Bilibili：[我不是鲲宝](https://search.bilibili.com/all?keyword=%E6%88%91%E4%B8%8D%E6%98%AF%E9%B2%B2%E5%AE%9D)
+
 ## 许可证
 
 [MIT](LICENSE)。基于 [rxi/microui](https://github.com/rxi/microui)（MIT）的 Zig 重写。

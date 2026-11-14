@@ -2,27 +2,38 @@ package com.microui.zigeditor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.Spannable;
 import android.text.SpannableString;
+import android.text.method.LinkMovementMethod;
 import android.text.style.ImageSpan;
+import android.text.style.URLSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AbsListView;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.ListView;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -155,7 +166,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
             if (!"native".equals(kind) && APK_RUN_COMMAND.equals(command)) openTerminal(true);
             else openTerminalRun(command);
         });
-        findViewById(R.id.btn_run_menu).setOnClickListener(v -> showRunSettings());
+        findViewById(R.id.btn_run_menu).setOnClickListener(v -> showTopMenu(v));
         editor.subscribeEvent(io.github.rosemoe.sora.event.ContentChangeEvent.class,
                 (event, unsub) -> editor.post(this::updateUndoRedo));
         updateUndoRedo();
@@ -493,6 +504,182 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
     /** 读项目 config.json 的 kind（gui/console/native）；读不到按空串（视为旧图形界面项目）。 */
     private String projectKind() {
         return readProjectConfig().optString("kind", "");
+    }
+
+    /** 编辑页右上角菜单：运行键参数 / 更新版本 / 关于捐助。 */
+    private void showTopMenu(View anchor) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        pm.getMenu().add("运行键参数");
+        pm.getMenu().add("更新版本");
+        pm.getMenu().add("关于捐助");
+        pm.setOnMenuItemClickListener(item -> {
+            String title = item.getTitle().toString();
+            if ("运行键参数".equals(title)) showRunSettings();
+            else if ("更新版本".equals(title)) showUpdateDialog();
+            else if ("关于捐助".equals(title)) showDonateDialog();
+            return true;
+        });
+        pm.show();
+    }
+
+    private static final String REPO_URL = "https://github.com/BO2023JAVA/zigeditor";
+    private static final String RELEASES_URL = REPO_URL + "/releases";
+
+    private void showUpdateDialog() {
+        final String current = currentVersionName() + "（" + currentVersionCode() + "）";
+        final String ubuntu = installedUbuntuVersion();
+        final String zig = installedZigVersion();
+
+        TextView info = new TextView(this);
+        info.setTextSize(13);
+        info.setTextColor(getColor(R.color.m3_on_surface));
+        info.setMovementMethod(LinkMovementMethod.getInstance());
+        info.setText(updateInfoText(current, ubuntu, zig, "检查中…", "检查中…"));
+
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        box.addView(info);
+
+        new AlertDialog.Builder(this)
+                .setTitle("更新版本")
+                .setView(box)
+                .setPositiveButton("去 GitHub", (d, w) -> openUrl(RELEASES_URL))
+                .setNegativeButton("关闭", null)
+                .show();
+
+        new Thread(() -> {
+            String latest = "获取失败";
+            String stars = "获取失败";
+            try {
+                org.json.JSONObject repo = fetchJson("https://api.github.com/repos/BO2023JAVA/zigeditor");
+                stars = String.valueOf(repo.optInt("stargazers_count"));
+            } catch (Exception ignored) { }
+            try {
+                org.json.JSONObject rel = fetchJson("https://api.github.com/repos/BO2023JAVA/zigeditor/releases/latest");
+                latest = rel.optString("tag_name", "未知");
+            } catch (Exception ignored) { }
+            final String fLatest = latest;
+            final String fStars = stars;
+            runOnUiThread(() -> info.setText(updateInfoText(current, ubuntu, zig, fLatest, fStars)));
+        }, "github-check").start();
+    }
+
+    private CharSequence updateInfoText(String current, String ubuntu, String zig,
+                                        String latest, String stars) {
+        StringBuilder s = new StringBuilder();
+        s.append("当前版本：").append(current).append("\n\n");
+        s.append("Ubuntu 运行时：").append(ubuntu).append("\n");
+        s.append("Zig 工具链：").append(zig).append("\n\n");
+        s.append("最新版本：").append(latest).append("\n");
+        s.append("Star 数：").append(stars).append("\n\n");
+        s.append("GitHub：").append(REPO_URL).append("\n\n");
+        s.append("如有版本问题（签名不一致无法覆盖安装等），请卸载旧版后重新安装最新版 APK。");
+        SpannableString ss = new SpannableString(s.toString());
+        int ls = s.indexOf(REPO_URL);
+        if (ls >= 0) ss.setSpan(new URLSpan(REPO_URL), ls, ls + REPO_URL.length(),
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return ss;
+    }
+
+    private String currentVersionName() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (Exception e) { return "未知"; }
+    }
+
+    private int currentVersionCode() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionCode; }
+        catch (Exception e) { return 0; }
+    }
+
+    private String installedUbuntuVersion() {
+        try {
+            com.microui.toolchain.PackageManager pm =
+                    new com.microui.toolchain.PackageManager(getFilesDir());
+            String id = com.microui.toolchain.ProotRunner.isX86(this)
+                    ? "ubuntu-runtime-x64" : "ubuntu-runtime";
+            String v = pm.installedVersion(id);
+            return v == null ? "未安装" : v;
+        } catch (Exception e) { return "未知"; }
+    }
+
+    private String installedZigVersion() {
+        try {
+            String id = com.microui.toolchain.ProotRunner.zigCurrentId(this);
+            if (id == null || id.isEmpty()) return "未安装";
+            return id.replaceFirst("^zig-", "").replaceFirst("-x64$", "");
+        } catch (Exception e) { return "未知"; }
+    }
+
+    private org.json.JSONObject fetchJson(String urlStr) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(8000);
+        conn.setRequestProperty("Accept", "application/vnd.github+json");
+        conn.setRequestProperty("User-Agent", "ZigEditor");
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder b = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) b.append(line);
+            return new org.json.JSONObject(b.toString());
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(this, "无法打开链接", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showDonateDialog() {
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(12), dp(20), dp(12));
+
+        ImageView img = new ImageView(this);
+        img.setImageResource(R.drawable.lovezig);
+        img.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int imgSize = dp(240);
+        android.widget.LinearLayout.LayoutParams ilp = new android.widget.LinearLayout.LayoutParams(imgSize, imgSize);
+        ilp.gravity = Gravity.CENTER_HORIZONTAL;
+        box.addView(img, ilp);
+
+        TextView author = new TextView(this);
+        author.setText("作者：鲲宝");
+        author.setTextSize(17);
+        author.setGravity(Gravity.CENTER);
+        author.setPadding(0, dp(14), 0, dp(6));
+        author.setTextColor(getColor(R.color.m3_on_surface));
+        box.addView(author);
+
+        TextView bili = new TextView(this);
+        String biliText = "Bilibili：我不是鲲宝（点击搜索）";
+        SpannableString bss = new SpannableString(biliText);
+        int bStart = biliText.indexOf("我不是鲲宝");
+        try {
+            String searchUrl = "https://search.bilibili.com/all?keyword="
+                    + URLEncoder.encode("我不是鲲宝", "UTF-8");
+            bss.setSpan(new URLSpan(searchUrl), bStart, biliText.indexOf("（"),
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        } catch (Exception ignored) { }
+        bili.setText(bss);
+        bili.setTextSize(14);
+        bili.setGravity(Gravity.CENTER);
+        bili.setMovementMethod(LinkMovementMethod.getInstance());
+        bili.setPadding(0, dp(6), 0, dp(8));
+        bili.setTextColor(getColor(R.color.m3_on_surface_variant));
+        box.addView(bili);
+
+        new AlertDialog.Builder(this)
+                .setTitle("关于捐助")
+                .setView(box)
+                .setPositiveButton("感谢支持", null)
+                .show();
     }
 
     /** 长按文件树节点：重命名 / 删除。 */

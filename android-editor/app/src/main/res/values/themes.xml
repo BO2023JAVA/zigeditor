@@ -14,6 +14,7 @@
 
     <!-- M3 对话框：28dp 圆角、surfaceContainerHigh、主色文字按钮 -->
     <style name="AppDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:background">@drawable/m3_dialog</item>
         <item name="android:colorAccent">@color/m3_primary</item>
         <item name="android:textColorPrimary">@color/m3_on_surface</item>

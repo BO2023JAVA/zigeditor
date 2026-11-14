@@ -704,6 +704,20 @@ public class PackagesActivity extends Activity {
     }
 
     private void pickArchive() {
+        String arch = ProotRunner.isX86(this) ? "x86_64-linux" : "aarch64-linux";
+        String msg = "请选择与本机 CPU 架构匹配的 Zig 压缩包：\n\n"
+                + "当前设备主 ABI：" + (ProotRunner.isX86(this) ? "x86_64" : "arm64-v8a")
+                + "\n建议下载 Zig 官方 " + arch + " 版本的 tar.xz 包。\n\n"
+                + "如果架构不匹配，安装后将无法在 proot 内运行 zig。";
+        new AlertDialog.Builder(this)
+                .setTitle("本地导入 Zig")
+                .setMessage(msg)
+                .setPositiveButton("选择文件", (d, w) -> doPickArchive())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void doPickArchive() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
