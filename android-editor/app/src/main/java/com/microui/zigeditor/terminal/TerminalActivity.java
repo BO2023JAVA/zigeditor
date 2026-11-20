@@ -68,6 +68,8 @@ public class TerminalActivity extends Activity {
     };
     /** 当前 SGR 颜色（-1 表示默认前景色）。 */
     private int sgrColor = -1;
+    /** 上次输出是单独的 \r：下一段非换行内容到来时覆盖当前行。 */
+    private boolean outputCr;
 
     private EditText screen;
     private TextView env;
@@ -115,7 +117,7 @@ public class TerminalActivity extends Activity {
                     // 不打包，进项目目录后直接执行配置的命令，输出看终端
                     if (ProotRunner.abiSupportHint(this).isEmpty()) {
                         pendingCd = "cd '/projects/" + dir.getName().replace("'", "'\\''")
-                                + "' && " + runCmd;
+                                + "' && " + withPtyIfZig(runCmd);
                         pendingRun = true;
                         append("[执行中] " + runCmd + "\n");
                     } else {
@@ -575,6 +577,7 @@ public class TerminalActivity extends Activity {
     /** 追加到屏幕末尾，并把光标移到末尾（新输入永远在最后一行）。 */
     private void append(String text) {
         if (text == null || text.isEmpty()) return;
+        outputCr = false;
         suppress = true;
         screen.append(text);
         suppress = false;
@@ -609,13 +612,19 @@ public class TerminalActivity extends Activity {
      */
     private void appendOutput(String text) {
         if (text == null || text.isEmpty()) return;
-        // 进度条用 \r 重写同一行：只保留最后一次回车之后的可见内容
-        if (text.indexOf('\r') >= 0) {
-            text = text.substring(text.lastIndexOf('\r') + 1);
-            if (text.isEmpty()) return;
+        // TerminalSession 把单独 \r 拆成独立回调；先记住回车，等下一段内容再覆盖，
+        // 这样仅凭 \r 结尾的进度不会被误删，CRLF 也仍按普通换行处理。
+        if ("\r".equals(text)) {
+            outputCr = true;
+            return;
+        }
+        if (outputCr) {
+            outputCr = false;
+            if (!text.startsWith("\n")) clearOutputLine();
         }
         // clear 命令输出 ESC[H ESC[2J：直接清屏，提示符由结束标记补上
         if (text.contains("\u001B[2J") || text.contains("\u001B[3J")) {
+            outputCr = false;
             suppress = true;
             screen.setText("");
             suppress = false;
@@ -643,6 +652,19 @@ public class TerminalActivity extends Activity {
         screen.post(() -> screen.setSelection(screen.length()));
     }
 
+    /** 清除当前输出行，供 \r 后的新进度覆盖；不影响之前的行和用户输入区。 */
+    private void clearOutputLine() {
+        Editable e = screen.getText();
+        int end = Math.min(lockedEnd, e.length());
+        int start = end;
+        while (start > 0 && e.charAt(start - 1) != '\n') start--;
+        if (start == end) return;
+        suppress = true;
+        e.delete(start, end);
+        suppress = false;
+        lockedEnd = start;
+    }
+
     private void colored(android.text.SpannableStringBuilder sb, String seg) {
         if (seg.isEmpty()) return;
         String plain = CSI_OTHER.matcher(seg).replaceAll("");
@@ -666,6 +688,20 @@ public class TerminalActivity extends Activity {
         if (code >= 30 && code <= 37) return PALETTE[code - 30];
         if (code >= 90 && code <= 97) return PALETTE[code - 90 + 8];
         return -1;
+    }
+
+    private static boolean isZigCommand(String cmd) {
+        return "zig".equals(cmd) || cmd.startsWith("zig ");
+    }
+
+    /** Zig 在 TTY 下才显示实时编译进度；用 Ubuntu 的 script 分配 PTY，并保留子命令退出码。 */
+    private static String withPtyIfZig(String cmd) {
+        if (!isZigCommand(cmd)) return cmd;
+        String quoted = "'" + cmd.replace("'", "'\\''") + "'";
+        return "if command -v script >/dev/null 2>&1; then "
+                + "script -q -e -f -c " + quoted + " /dev/null; "
+                + "else printf '%s\\n' '[提示] 当前 Ubuntu 缺少 script，已改用普通输出；"
+                + "安装 util-linux 可显示实时进度。' >&2; " + cmd + "; fi";
     }
 
     /** 提交最后一行提示符后的内容。 */
@@ -692,12 +728,13 @@ public class TerminalActivity extends Activity {
         promptText = hostShell ? PROMPT_HOST : PROMPT_PROOT;
         try {
             // 无 TTY 时 bash 不会自己输出 PS1，用结束标记判断何时打印新提示符
-            String line = cmd + "; printf '" + CMD_DONE + "%s|%s\\n' \"$?\" \"$PWD\"";
+            String executed = hostShell ? cmd : withPtyIfZig(cmd);
+            String line = executed + "; printf '" + CMD_DONE + "%s|%s\\n' \"$?\" \"$PWD\"";
             lastSentEcho = line;          // 记住原文，用于过滤 shell 的回显行
             reportDone = true;
             session.send(line);
-            if (cmd.startsWith("zig ")) {
-                append("[执行中] Zig 首次编译可能需要等待，完成后会显示退出码。\n");
+            if (isZigCommand(cmd)) {
+                append("[执行中] Zig 首次编译可能需要等待，编译输出会实时显示。\n");
             }
             history.add(cmd);             // ↑/↓ 可翻回来
             historyIndex = history.size();
