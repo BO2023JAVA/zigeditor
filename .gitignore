@@ -10,6 +10,8 @@ android/keystore.properties
 android-editor/.gradle/
 android-editor/build/
 android-editor/app/build/
+android-editor/terminal-emulator/build/
+android-editor/terminal-view/build/
 android-editor/.idea/
 android-editor/local.properties
 android-toolchain/build/

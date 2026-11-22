@@ -1,6 +1,7 @@
 package com.microui.zigeditor;
 
 import android.content.Context;
+import android.content.res.Configuration;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -18,29 +19,36 @@ import io.github.rosemoe.sora.langs.textmate.registry.provider.AssetsFileResolve
  */
 final class TextMateSupport {
 
-    private static final String THEME_NAME = "quietlight";
-    private static final String THEME_ASSET = "textmate/quietlight.json";
+    private static final String LIGHT_THEME_NAME = "blueberry-light";
+    private static final String LIGHT_THEME_ASSET = "textmate/blueberry-light.json";
+    private static final String DARK_THEME_NAME = "blueberry-dark";
+    private static final String DARK_THEME_ASSET = "textmate/blueberry-dark.json";
     private static boolean ready = false;
 
     private TextMateSupport() {
     }
 
     static synchronized void ensure(Context context) throws Exception {
-        if (ready) {
-            return;
-        }
         Context app = context.getApplicationContext();
-        FileProviderRegistry.getInstance().addFileProvider(new AssetsFileResolver(app.getAssets()));
+        if (!ready) {
+            FileProviderRegistry.getInstance().addFileProvider(new AssetsFileResolver(app.getAssets()));
+            loadTheme(LIGHT_THEME_ASSET, LIGHT_THEME_NAME);
+            loadTheme(DARK_THEME_ASSET, DARK_THEME_NAME);
+            GrammarRegistry.getInstance().loadGrammars("textmate/languages.json");
+            ready = true;
+        }
 
-        InputStream themeIn = FileProviderRegistry.getInstance().tryGetInputStream(THEME_ASSET);
+        boolean night = (context.getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        ThemeRegistry.getInstance().setTheme(night ? DARK_THEME_NAME : LIGHT_THEME_NAME);
+    }
+
+    private static void loadTheme(String asset, String name) throws Exception {
+        InputStream themeIn = FileProviderRegistry.getInstance().tryGetInputStream(asset);
         if (themeIn == null) {
-            throw new IOException("缺少资源：" + THEME_ASSET);
+            throw new IOException("缺少资源：" + asset);
         }
         ThemeRegistry.getInstance().loadTheme(
-                new ThemeModel(IThemeSource.fromInputStream(themeIn, THEME_ASSET, null), THEME_NAME));
-        ThemeRegistry.getInstance().setTheme(THEME_NAME);
-
-        GrammarRegistry.getInstance().loadGrammars("textmate/languages.json");
-        ready = true;
+                new ThemeModel(IThemeSource.fromInputStream(themeIn, asset, null), name));
     }
 }

@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
@@ -392,8 +391,9 @@ public class PackagesActivity extends Activity {
 
             // 未装且缺前置依赖 → 置灰
             v.setAlpha(blocked ? 0.45f : 1f);
-            title.setTextColor(s == UiState.FAILED ? Color.rgb(200, 60, 60)
-                    : blocked ? Color.GRAY : Color.BLACK);
+            title.setTextColor(getColor(s == UiState.FAILED ? com.microui.zigeditor.R.color.m3_error
+                    : blocked ? com.microui.zigeditor.R.color.m3_on_surface_variant
+                    : com.microui.zigeditor.R.color.m3_on_surface));
             return v;
         }
     }
@@ -442,7 +442,7 @@ public class PackagesActivity extends Activity {
             pb.setVisibility(ProgressBar.GONE);
         }
         v.setAlpha(1f);
-        title.setTextColor(Color.BLACK);
+        title.setTextColor(getColor(com.microui.zigeditor.R.color.m3_on_surface));
         return v;
     }
 
@@ -633,12 +633,12 @@ public class PackagesActivity extends Activity {
         TextView k = new TextView(this);
         k.setText(label);
         k.setTextSize(12);
-        k.setTextColor(Color.rgb(130, 130, 130));
+        k.setTextColor(getColor(com.microui.zigeditor.R.color.m3_on_surface_variant));
         k.setWidth(dp(56));
         TextView v = new TextView(this);
         v.setText(value);
         v.setTextSize(13);
-        v.setTextColor(Color.rgb(40, 40, 40));
+        v.setTextColor(getColor(com.microui.zigeditor.R.color.m3_on_surface));
         v.setLayoutParams(new LinearLayout.LayoutParams(0,
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(k);

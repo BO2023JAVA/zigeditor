@@ -60,6 +60,9 @@ android.sourceSets.main.assets.srcDirs += genAssetsDir.get().asFile
 tasks.named('preBuild').configure { dependsOn 'syncPackagesManifest' }
 
 dependencies {
+    // 真实 PTY、ANSI 渲染与终端触摸/键盘交互
+    implementation project(':terminal-view')
+
     // 端上工具链：包管理 / proot / apksig 重打包
     implementation project(':android-toolchain')
 

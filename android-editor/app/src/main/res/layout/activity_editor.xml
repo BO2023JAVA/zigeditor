@@ -41,25 +41,25 @@
                 android:textSize="18sp"
                 android:textStyle="bold" />
 
-            <Button
+            <ImageButton
                 android:id="@+id/btn_undo"
-                style="?android:attr/borderlessButtonStyle"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
+                android:background="@drawable/m3_run_button"
                 android:contentDescription="撤销"
-                android:text="↶"
-                android:textColor="@color/m3_on_surface_variant"
-                android:textSize="18sp" />
+                android:padding="12dp"
+                android:src="@drawable/ic_undo"
+                android:tint="@color/m3_on_primary_container" />
 
-            <Button
+            <ImageButton
                 android:id="@+id/btn_redo"
-                style="?android:attr/borderlessButtonStyle"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
+                android:background="@drawable/m3_run_button"
                 android:contentDescription="重做"
-                android:text="↷"
-                android:textColor="@color/m3_on_surface_variant"
-                android:textSize="18sp" />
+                android:padding="12dp"
+                android:src="@drawable/ic_redo"
+                android:tint="@color/m3_on_primary_container" />
 
             <Button
                 android:id="@+id/btn_run"

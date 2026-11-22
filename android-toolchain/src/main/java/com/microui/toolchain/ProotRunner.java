@@ -135,20 +135,27 @@ public final class ProotRunner {
     }
 
     /**
-     * 启动一个交互式 bash（终端 UI 用）。
-     * 编辑器项目目录 files/zig 绑定到容器内 /projects，可直接 cd 进去编译。
-     * 没有 pty，提示符统一由终端 UI 自己打印（PS1 清空 + --norc，
-     * 否则 rootfs 的 .bashrc 会把提示符改成 root@localhost:/root# 造成双提示符）。
+     * 启动交互式 bash（Termux PTY 终端 UI 用），可选先进入项目目录并执行一条命令。
+     * 初始任务直接由 bash -c 执行，避免内部命令被 PTY 回显；结束后进入正常交互终端。
      */
-    public static ProcessBuilder terminal(Context c) throws IOException {
+    public static ProcessBuilder terminal(Context c, String projectPath, String runCommand) throws IOException {
         File zigProjects = new File(c.getFilesDir(), "zig");
         zigProjects.mkdirs();
         List<String> binds = new ArrayList<>();
         binds.add(zigProjects.getAbsolutePath() + ":/projects");
-        // 不加 -i：管道 stdin 照样逐条执行且保持 shell 状态（cd/变量），
-        // 同时避免无 TTY 下交互模式的两行警告
-        // "cannot set terminal process group ... / no job control in this shell"。
-        return base(c, binds, Arrays.asList("/bin/bash", "--norc"));
+        java.util.Map<String, String> env = new java.util.HashMap<>();
+        env.put("PS1", "root@ubuntu:\\w# ");
+        String startup = "umask 022; chmod -R a+rwX /projects 2>/dev/null; "
+                + "__zigeditor_rc=0; "
+                + "if [ -n \"$1\" ]; then cd \"$1\" || __zigeditor_rc=$?; fi; "
+                + "if [ -n \"$2\" ]; then "
+                + "if [ \"$__zigeditor_rc\" -eq 0 ]; then ( eval \"$2\" ); __zigeditor_rc=$?; fi; "
+                + "if [ \"$__zigeditor_rc\" -eq 0 ]; then printf '\\n[完成] 退出码 0\\n'; "
+                + "else printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; fi; "
+                + "elif [ \"$__zigeditor_rc\" -ne 0 ]; then printf '[失败] 无法进入项目目录\\n'; fi; "
+                + "export PS1='root@ubuntu:\\w# '; exec /bin/bash --norc -i";
+        return base(c, binds, Arrays.asList("/bin/bash", "--norc", "-c", startup, "zigeditor",
+                projectPath == null ? "" : projectPath, runCommand == null ? "" : runCommand), env);
     }
 
     /**
@@ -252,6 +259,12 @@ public final class ProotRunner {
      * 而 proot 依赖 ptrace(TRACEME) 才能工作）；没有 su 时直接在 app 域内执行。
      */
     public static ProcessBuilder base(Context c, List<String> extraBinds, List<String> cmd) throws IOException {
+        return base(c, extraBinds, cmd, java.util.Collections.emptyMap());
+    }
+
+    /** 同上，并允许交互终端在 su 命令生成前覆盖环境变量。 */
+    private static ProcessBuilder base(Context c, List<String> extraBinds, List<String> cmd,
+                                       Map<String, String> envOverrides) throws IOException {
         File proot = prootExe(c);
         if (!proot.isFile()) throw new IOException("缺少 " + proot + "（检查 jniLibs 与 extractNativeLibs=true）");
         if (!new File(rootfs(c), "usr").isDirectory())
@@ -284,16 +297,20 @@ public final class ProotRunner {
                 {"TMPDIR", r.getAbsolutePath() + "/tmp"},
         };
 
+        Map<String, String> effectiveEnv = new java.util.LinkedHashMap<>();
+        for (String[] kv : env) effectiveEnv.put(kv[0], kv[1]);
+        effectiveEnv.putAll(envOverrides);
+
         ProcessBuilder pb;
         if (suAvailable()) {
             StringBuilder sb = new StringBuilder("cd ").append(shQuote(r.getAbsolutePath())).append(" && ");
-            for (String[] kv : env) sb.append(kv[0]).append('=').append(shQuote(kv[1])).append(' ');
+            for (Map.Entry<String, String> kv : effectiveEnv.entrySet())
+                sb.append(kv.getKey()).append('=').append(shQuote(kv.getValue())).append(' ');
             for (String a : args) sb.append(shQuote(a)).append(' ');
             pb = new ProcessBuilder(suExe(), "-c", sb.toString());
         } else {
             pb = new ProcessBuilder(args);
-            Map<String, String> e = pb.environment();
-            for (String[] kv : env) e.put(kv[0], kv[1]);
+            pb.environment().putAll(effectiveEnv);
             pb.directory(r);
         }
         pb.redirectErrorStream(true);

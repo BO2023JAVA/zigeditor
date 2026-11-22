@@ -1,0 +1,12 @@
+Terminal Emulator for Android / Termux terminal-emulator
+Copyright The Termux Project and Terminal Emulator for Android contributors
+
+Source: https://github.com/termux/termux-app/tree/8629e632fcb95da272221be327db653fb24befe9/terminal-emulator
+Pinned commit: 8629e632fcb95da272221be327db653fb24befe9
+
+The upstream repository root is GPLv3-only, but its LICENSE.md expressly
+identifies terminal-emulator and terminal-view as Apache-2.0 exceptions.
+See UPSTREAM-LICENSE.md for the original upstream license notice.
+
+The bundled Gradle configuration is adapted locally for ZigEditor. Upstream
+Java and native sources retain their original copyright and license notices.

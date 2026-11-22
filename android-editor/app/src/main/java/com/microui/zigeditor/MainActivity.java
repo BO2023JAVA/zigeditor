@@ -93,6 +93,9 @@ public class MainActivity extends Activity {
         });
 
         findViewById(R.id.new_project).setOnClickListener(v -> showNewProjectDialog());
+        // 右上角扳手：进入包管理（Ubuntu 运行时 / Zig 工具链）
+        findViewById(R.id.open_packages).setOnClickListener(v -> startActivity(
+                new Intent(this, com.microui.zigeditor.terminal.PackagesActivity.class)));
 
         maybePromptToolchain();
     }
@@ -370,7 +373,7 @@ public class MainActivity extends Activity {
                 + "原生zig：空目录，创建后进终端 zig init 生成结构，可编译 .so 到 Download\n"
                 + "提示：原生zig 建议使用 Zig 0.16，0.17.x 在部分 ARM 手机执行 zig init 会崩溃");
         kindHint.setTextSize(11);
-        kindHint.setTextColor(0xFF888888);
+        kindHint.setTextColor(getColor(R.color.m3_on_surface_variant));
         box.addView(kindHint);
 
         // 应用图标：默认内置吉祥物，可在此换图，右侧实时预览

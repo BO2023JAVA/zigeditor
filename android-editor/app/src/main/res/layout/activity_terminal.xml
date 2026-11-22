@@ -3,41 +3,32 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#141218">
+    android:background="@color/m3_surface">
 
     <TextView
         android:id="@+id/terminal_env"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="8dp"
-        android:textColor="#D0BCFF"
+        android:textColor="@color/m3_primary"
         android:textSize="12sp"
         android:text="检查 proot / rootfs / zig ..." />
 
-    <!-- 终端屏幕：输出与命令输入在同一块文本里，类似 Termux，不再是分离的输入框 -->
-    <EditText
+    <!-- 与 Xed-Editor 同类的 Termux 终端：真实 PTY、ANSI、光标、滚动和文本选择。 -->
+    <com.termux.view.TerminalView
         android:id="@+id/terminal_screen"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="#141218"
-        android:cursorVisible="true"
-        android:fontFamily="monospace"
-        android:gravity="top|start"
-        android:hint=""
-        android:imeOptions="actionSend"
-        android:inputType="textNoSuggestions|textMultiLine"
-        android:padding="8dp"
-        android:scrollbars="vertical"
-        android:textColor="#E6E0E9"
-        android:textCursorDrawable="@null"
-        android:textSize="12sp" />
+        android:background="@color/m3_surface"
+        android:focusable="true"
+        android:focusableInTouchMode="true" />
 
     <!-- 终端辅助键栏：Tab、方向键、Ctrl（对准输入行做编辑/历史翻找），最右是包管理 -->
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#211F26"
+        android:background="@color/m3_surface_container"
         android:scrollbars="none">
 
         <LinearLayout
@@ -53,7 +44,7 @@
                 android:minWidth="48dp"
                 android:text="Tab"
                 android:textAllCaps="false"
-                android:textColor="#E6E0E9" />
+                android:textColor="@color/m3_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_up"
@@ -62,7 +53,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="↑"
-                android:textColor="#E6E0E9" />
+                android:textColor="@color/m3_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_down"
@@ -71,7 +62,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="↓"
-                android:textColor="#E6E0E9" />
+                android:textColor="@color/m3_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_left"
@@ -80,7 +71,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="←"
-                android:textColor="#E6E0E9" />
+                android:textColor="@color/m3_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_right"
@@ -89,7 +80,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="→"
-                android:textColor="#E6E0E9" />
+                android:textColor="@color/m3_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_ctrl"
@@ -99,7 +90,7 @@
                 android:minWidth="56dp"
                 android:text="Ctrl"
                 android:textAllCaps="false"
-                android:textColor="#D0BCFF" />
+                android:textColor="@color/m3_primary" />
 
             <Button
                 android:id="@+id/btn_pkgs"
@@ -109,7 +100,7 @@
                 android:minWidth="72dp"
                 android:text="包管理"
                 android:textAllCaps="false"
-                android:textColor="#EFB8C8" />
+                android:textColor="@color/m3_primary" />
         </LinearLayout>
     </HorizontalScrollView>
 

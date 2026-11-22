@@ -19,6 +19,7 @@ import android.view.ViewGroup;
 import android.widget.AbsListView;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.PopupMenu;
@@ -62,7 +63,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
 
     private CodeEditor editor;
     private TextView fileName;
-    private View btnUndo, btnRedo;
+    private ImageButton btnUndo, btnRedo;
     private File projectDir;
     private File file;
     private boolean loaded;
@@ -153,7 +154,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
 
     // ---------------------------------------------------------------- 编辑
 
-    /** 顶部工具按钮：↶ 撤销 / ↷ 重做 / ▶ 编译打包。撤销重做按可用状态置灰。 */
+    /** 顶部工具按钮：撤销 / 重做 / 编译打包。撤销重做按可用状态置灰。 */
     private void setupToolButtons() {
         btnUndo = findViewById(R.id.btn_undo);
         btnRedo = findViewById(R.id.btn_redo);
@@ -174,8 +175,12 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
 
     private void updateUndoRedo() {
         if (btnUndo == null || btnRedo == null) return;
-        btnUndo.setEnabled(editor.canUndo());
-        btnRedo.setEnabled(editor.canRedo());
+        boolean canUndo = editor.canUndo();
+        boolean canRedo = editor.canRedo();
+        btnUndo.setEnabled(canUndo);
+        btnUndo.setImageAlpha(canUndo ? 255 : 97);
+        btnRedo.setEnabled(canRedo);
+        btnRedo.setImageAlpha(canRedo ? 255 : 97);
     }
 
     /** 项目内优先打开 main.zig，其次第一个 .zig。 */
