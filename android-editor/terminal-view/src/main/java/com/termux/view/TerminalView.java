@@ -661,6 +661,14 @@ public final class TerminalView extends View {
                         return onKeyUp(keyCode, event);
                 }
             }
+        } else if (keyCode == KeyEvent.KEYCODE_ENTER) {
+            // 某些输入法会在 Enter 到达 onKeyDown 前消费 ACTION_DOWN，需提前交给终端。
+            switch (event.getAction()) {
+                case KeyEvent.ACTION_DOWN:
+                    return onKeyDown(keyCode, event);
+                case KeyEvent.ACTION_UP:
+                    return onKeyUp(keyCode, event);
+            }
         } else if (mClient.shouldUseCtrlSpaceWorkaround() &&
                    keyCode == KeyEvent.KEYCODE_SPACE && event.isCtrlPressed()) {
             /* ctrl+space does not work on some ROMs without this workaround.

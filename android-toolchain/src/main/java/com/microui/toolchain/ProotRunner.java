@@ -150,8 +150,7 @@ public final class ProotRunner {
                 + "if [ -n \"$1\" ]; then cd \"$1\" || __zigeditor_rc=$?; fi; "
                 + "if [ -n \"$2\" ]; then "
                 + "if [ \"$__zigeditor_rc\" -eq 0 ]; then ( eval \"$2\" ); __zigeditor_rc=$?; fi; "
-                + "if [ \"$__zigeditor_rc\" -eq 0 ]; then printf '\\n[完成] 退出码 0\\n'; "
-                + "else printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; fi; "
+                + "if [ \"$__zigeditor_rc\" -ne 0 ]; then printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; fi; "
                 + "elif [ \"$__zigeditor_rc\" -ne 0 ]; then printf '[失败] 无法进入项目目录\\n'; fi; "
                 + "export PS1='root@ubuntu:\\w# '; exec /bin/bash --norc -i";
         return base(c, binds, Arrays.asList("/bin/bash", "--norc", "-c", startup, "zigeditor",
