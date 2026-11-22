@@ -367,7 +367,8 @@ public class MainActivity extends Activity {
         TextView kindHint = new TextView(this);
         kindHint.setText("图形界面：内置 microui + SDL，适合做应用/游戏\n"
                 + "纯终端：只用 Zig 标准库，输出显示在 APK 的终端窗口里\n"
-                + "原生zig：空目录，创建后进终端 zig init 生成结构，可编译 .so 到 Download");
+                + "原生zig：空目录，创建后进终端 zig init 生成结构，可编译 .so 到 Download\n"
+                + "提示：原生zig 建议使用 Zig 0.16，0.17.x 在部分 ARM 手机执行 zig init 会崩溃");
         kindHint.setTextSize(11);
         kindHint.setTextColor(0xFF888888);
         box.addView(kindHint);
@@ -432,7 +433,12 @@ public class MainActivity extends Activity {
                     pendingNewIconUri = null;
                     newIconPreview = null;
                     refresh();
-                    if (isNative) openTerminalForInit(dir);
+                    if (isNative) {
+                        Toast.makeText(this,
+                                "建议使用 Zig 0.16 初始化（0.17.x 在部分 ARM 手机执行 zig init 会崩溃）",
+                                Toast.LENGTH_LONG).show();
+                        openTerminalForInit(dir);
+                    }
                 })
                 .setNegativeButton("取消", (dialog, which) -> {
                     pendingNewIconUri = null;
