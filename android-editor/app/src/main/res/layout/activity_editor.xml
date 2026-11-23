@@ -43,8 +43,8 @@
 
             <ImageButton
                 android:id="@+id/btn_undo"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
                 android:background="@drawable/m3_run_button"
                 android:contentDescription="撤销"
                 android:padding="12dp"
@@ -53,8 +53,8 @@
 
             <ImageButton
                 android:id="@+id/btn_redo"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
                 android:background="@drawable/m3_run_button"
                 android:contentDescription="重做"
                 android:padding="12dp"
