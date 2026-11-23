@@ -104,6 +104,11 @@ public final class ProotRunner {
         return "";
     }
 
+    /** 原生项目仅允许 Zig 0.16：0.17.x 在部分 ARM 手机执行 zig init 会崩溃。 */
+    public static boolean isZig016(Context c) {
+        return zigCurrentId(c).startsWith("zig-0.16");
+    }
+
     /** 切换当前 zig 版本（写入标记文件，终端下次启动生效）。 */
     public static void setZigCurrentId(Context c, String id) throws IOException {
         setZigCurrentId(microuiRoot(c), id);
@@ -138,7 +143,8 @@ public final class ProotRunner {
      * 启动交互式 bash（Termux PTY 终端 UI 用），可选先进入项目目录并执行一条命令。
      * 初始任务直接由 bash -c 执行，避免内部命令被 PTY 回显；结束后进入正常交互终端。
      */
-    public static ProcessBuilder terminal(Context c, String projectPath, String runCommand) throws IOException {
+    public static ProcessBuilder terminal(Context c, String projectPath, String runCommand,
+                                          String successMarker) throws IOException {
         File zigProjects = new File(c.getFilesDir(), "zig");
         zigProjects.mkdirs();
         List<String> binds = new ArrayList<>();
@@ -150,11 +156,13 @@ public final class ProotRunner {
                 + "if [ -n \"$1\" ]; then cd \"$1\" || __zigeditor_rc=$?; fi; "
                 + "if [ -n \"$2\" ]; then "
                 + "if [ \"$__zigeditor_rc\" -eq 0 ]; then ( eval \"$2\" ); __zigeditor_rc=$?; fi; "
-                + "if [ \"$__zigeditor_rc\" -ne 0 ]; then printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; fi; "
+                + "if [ \"$__zigeditor_rc\" -ne 0 ]; then printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; "
+                + "elif [ -n \"$3\" ]; then printf '\\n%s\\n' \"$3\"; fi; "
                 + "elif [ \"$__zigeditor_rc\" -ne 0 ]; then printf '[失败] 无法进入项目目录\\n'; fi; "
                 + "export PS1='root@ubuntu:\\w# '; exec /bin/bash --norc -i";
         return base(c, binds, Arrays.asList("/bin/bash", "--norc", "-c", startup, "zigeditor",
-                projectPath == null ? "" : projectPath, runCommand == null ? "" : runCommand), env);
+                projectPath == null ? "" : projectPath, runCommand == null ? "" : runCommand,
+                successMarker == null ? "" : successMarker), env);
     }
 
     /**

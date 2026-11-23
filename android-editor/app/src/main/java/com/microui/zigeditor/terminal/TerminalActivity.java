@@ -55,6 +55,10 @@ public class TerminalActivity extends Activity {
     public static final String EXTRA_AUTO_COMPILE = "extra_auto_compile";
     /** 原生 zig 项目专用：会话起来后在项目目录里直接执行这条命令（如 zig build run），不打包。 */
     public static final String EXTRA_RUN_CMD = "extra_run_cmd";
+    /** 原生项目初始化：自动命令成功后自动跳回编辑页。 */
+    public static final String EXTRA_OPEN_EDITOR_AFTER_RUN = "extra_open_editor_after_run";
+    /** 自动命令成功时由 shell 打印的标记，终端扫到后跳编辑页。 */
+    private static final String NATIVE_INIT_OK_MARKER = "__ZIGEDITOR_NATIVE_INIT_OK__";
 
     private static final int TRANSCRIPT_ROWS = 2000;
     private static final int MAX_PENDING_LOG_CHARS = 200_000;
@@ -78,6 +82,10 @@ public class TerminalActivity extends Activity {
     /** PTY 就绪后进入的容器目录，以及可选的自动运行命令。 */
     private String initialProjectPath;
     private String initialRunCommand;
+    /** 原生项目初始化成功后要跳转的宿主项目目录，以及是否需要跳转。 */
+    private boolean openEditorAfterRun;
+    private File editorProjectDir;
+    private boolean editorOpened;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -106,6 +114,8 @@ public class TerminalActivity extends Activity {
                     if (ProotRunner.abiSupportHint(this).isEmpty()) {
                         initialProjectPath = "/projects/" + dir.getName();
                         initialRunCommand = runCmd;
+                        openEditorAfterRun = getIntent().getBooleanExtra(EXTRA_OPEN_EDITOR_AFTER_RUN, false);
+                        editorProjectDir = dir;
                     } else {
                         log("\n[运行] 当前设备无法运行 proot，请在 ABI 匹配的设备上编译运行");
                     }
@@ -256,7 +266,8 @@ public class TerminalActivity extends Activity {
             } else {
                 hostShell = false;
                 try {
-                    pb = ProotRunner.terminal(this, initialProjectPath, initialRunCommand);
+                    pb = ProotRunner.terminal(this, initialProjectPath, initialRunCommand,
+                            openEditorAfterRun ? NATIVE_INIT_OK_MARKER : null);
                 } catch (IOException e) {
                     hostShell = true;
                     log("启动 proot 失败：" + e.getMessage() + "\n已回退到 Android 宿主 shell。");
@@ -308,6 +319,20 @@ public class TerminalActivity extends Activity {
         flushPendingOutput();
     }
 
+    /** 原生项目 zig init 成功（shell 打出标记）后，自动进入项目编辑页。 */
+    private void checkNativeInitDone() {
+        if (!openEditorAfterRun || editorOpened || destroyed || session == null
+                || session.getEmulator() == null || editorProjectDir == null) return;
+        String transcript = session.getEmulator().getScreen().getTranscriptText();
+        if (transcript == null || !transcript.contains(NATIVE_INIT_OK_MARKER)) return;
+        editorOpened = true;
+        Intent i = new Intent(this, com.microui.zigeditor.EditorActivity.class);
+        i.putExtra(com.microui.zigeditor.EditorActivity.EXTRA_PROJECT_DIR,
+                editorProjectDir.getAbsolutePath());
+        startActivity(i);
+        finish();
+    }
+
     // ------------------------------------------------------------- 辅助键栏
 
     private void setupKeyBar() {
@@ -357,6 +382,7 @@ public class TerminalActivity extends Activity {
     private final class SessionClient implements TerminalSessionClient {
         @Override public void onTextChanged(@NonNull TerminalSession changedSession) {
             screen.onScreenUpdated();
+            checkNativeInitDone();
         }
 
         @Override public void onTitleChanged(@NonNull TerminalSession changedSession) { }

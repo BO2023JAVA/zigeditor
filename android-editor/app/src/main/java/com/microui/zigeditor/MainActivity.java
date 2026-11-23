@@ -371,7 +371,7 @@ public class MainActivity extends Activity {
         kindHint.setText("图形界面：内置 microui + SDL，适合做应用/游戏\n"
                 + "纯终端：只用 Zig 标准库，输出显示在 APK 的终端窗口里\n"
                 + "原生zig：空目录，创建后进终端 zig init 生成结构，可编译 .so 到 Download\n"
-                + "提示：原生zig 建议使用 Zig 0.16，0.17.x 在部分 ARM 手机执行 zig init 会崩溃");
+                + "提示：原生zig 只能用 Zig 0.16 创建，0.17.x 在部分 ARM 手机执行 zig init 会崩溃");
         kindHint.setTextSize(11);
         kindHint.setTextColor(getColor(R.color.m3_on_surface_variant));
         box.addView(kindHint);
@@ -417,6 +417,20 @@ public class MainActivity extends Activity {
                                 Toast.LENGTH_LONG).show();
                         return;
                     }
+                    // 原生项目仅支持 Zig 0.16：先校验再建目录，避免留下空项目
+                    String kind = guiRadio.isChecked() ? "gui"
+                            : (consoleRadio.isChecked() ? "console" : "native");
+                    boolean isNative = "native".equals(kind);
+                    if (isNative && !com.microui.toolchain.ProotRunner.isZig016(this)) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("原生项目需要 Zig 0.16")
+                                .setMessage("原生项目只能用 Zig 0.16 创建（0.17.x 在部分 ARM 手机执行 zig init 会崩溃）。\n\n请先在「包管理」中安装并切换到 Zig 0.16.0，再创建原生项目。")
+                                .setPositiveButton("去包管理", (d, w) -> startActivity(new Intent(this,
+                                        com.microui.zigeditor.terminal.PackagesActivity.class)))
+                                .setNegativeButton("取消", null)
+                                .show();
+                        return;
+                    }
                     File dir = new File(projectsRoot, nameText);
                     if (dir.exists() || !dir.mkdirs()) {
                         Toast.makeText(this, "创建失败：同名文件夹已存在或目录不可写",
@@ -425,10 +439,7 @@ public class MainActivity extends Activity {
                     }
                     // 按所选类型复制模板（gui=core/+ui/，console=core/+app.zig）；
                     // 原生zig 不预设文件：空目录创建后跳终端 zig init 生成结构
-                    String kind = guiRadio.isChecked() ? "gui"
-                            : (consoleRadio.isChecked() ? "console" : "native");
                     String title = app.isEmpty() ? nameText : app;
-                    boolean isNative = "native".equals(kind);
                     if (!isNative && !copyTemplate(dir, title, kind))
                         writeSample(new File(dir, "main.zig"));
                     if (!copyChosenIcon(dir)) copyDefaultIcon(dir);
@@ -437,10 +448,10 @@ public class MainActivity extends Activity {
                     newIconPreview = null;
                     refresh();
                     if (isNative) {
-                        Toast.makeText(this,
-                                "建议使用 Zig 0.16 初始化（0.17.x 在部分 ARM 手机执行 zig init 会崩溃）",
-                                Toast.LENGTH_LONG).show();
                         openTerminalForInit(dir);
+                    } else {
+                        // 图形界面 / 纯终端：创建后直接进入编辑页
+                        openProject(dir);
                     }
                 })
                 .setNegativeButton("取消", (dialog, which) -> {
@@ -734,6 +745,7 @@ public class MainActivity extends Activity {
                 dir.getAbsolutePath());
         i.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_AUTO_COMPILE, false);
         i.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_RUN_CMD, "zig init");
+        i.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_OPEN_EDITOR_AFTER_RUN, true);
         startActivity(i);
     }
 
