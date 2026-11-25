@@ -1,8 +1,8 @@
 package com.microui.zigeditor;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
@@ -23,8 +23,13 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.PopupMenu;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import static com.microui.zigeditor.EditorSettings.*;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -54,7 +59,7 @@ import io.github.rosemoe.sora.widget.CodeEditor;
  * 代码编辑页：sora-editor + Zig TextMate 高亮 + UTF-8 原子保存。
  * 从项目页进入时自动展开左侧文件树（VSCode 风格，文件夹可展开/收起）。
  */
-public class EditorActivity extends Activity implements DrawerRootLayout.Listener {
+public class EditorActivity extends ThemedActivity implements DrawerRootLayout.Listener {
 
     public static final String EXTRA_PATH = "extra_path";
     public static final String EXTRA_PROJECT_DIR = "extra_project_dir";
@@ -64,6 +69,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
     private CodeEditor editor;
     private TextView fileName;
     private ImageButton btnUndo, btnRedo;
+    private AlertDialog settingsDialog;
     private File projectDir;
     private File file;
     private boolean loaded;
@@ -97,6 +103,8 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
             finish();
             return;
         }
+        // 项目声明了 zigVersion 时，进入项目即切到对应工具链
+        com.microui.toolchain.ProotRunner.useZigForProject(this, projectDir);
         setContentView(R.layout.activity_editor);
         ((DrawerRootLayout) findViewById(R.id.drawer_root)).setListener(this);
 
@@ -107,11 +115,21 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         drawer = findViewById(R.id.drawer);
         scrim = findViewById(R.id.drawer_scrim);
         drawer.setTranslationX(-dp(DRAWER_WIDTH_DP));
-        // 侧滑栏头部：项目名 + 完整路径
-        ((TextView) findViewById(R.id.project_name)).setText(
-                projectDir.getName() + "\n" + projectDir.getAbsolutePath());
+        // 侧滑栏头部：项目名 + 路径
+        ((TextView) findViewById(R.id.project_name)).setText(projectDir.getName());
+        ((TextView) findViewById(R.id.project_path)).setText(projectDir.getAbsolutePath());
         findViewById(R.id.drawer_toggle).setOnClickListener(v -> toggleDrawer());
         scrim.setOnClickListener(v -> closeDrawer());
+
+        // 侧滑栏底部：夜间模式开关（白天 / 夜间，手动选择即关闭跟随系统）
+        // 用点击事件而不是 onCheckedChanged：页面重建时恢复控件状态不会误改偏好
+        final Switch nightSwitch = findViewById(R.id.night_switch);
+        nightSwitch.setChecked(ThemeSettings.isDark(this));
+        nightSwitch.setOnClickListener(v -> {
+            ThemeSettings.setMode(this, nightSwitch.isChecked()
+                    ? ThemeSettings.MODE_DARK : ThemeSettings.MODE_LIGHT);
+            recreate();
+        });
         findViewById(R.id.new_zig_file).setOnClickListener(v -> showNewMenu());
         findViewById(R.id.api_docs).setOnClickListener(v ->
                 startActivity(new android.content.Intent(this, DocsActivity.class)));
@@ -132,12 +150,14 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         });
 
         try {
-            TextMateSupport.ensure(getApplicationContext());
+            // 传 Activity 而非 Application：主题强制后 Activity 资源才带正确的夜间配置
+            TextMateSupport.ensure(this);
             editor.setColorScheme(TextMateColorScheme.create(ThemeRegistry.getInstance()));
             editor.setEditorLanguage(TextMateLanguage.create("source.zig", true));
         } catch (Exception e) {
             Toast.makeText(this, "TextMate 初始化失败：" + e, Toast.LENGTH_LONG).show();
         }
+        EditorSettings.applyAll(editor, this);
 
         if (file == null) file = pickInitialFile();
         if (file != null) openFile(file);
@@ -276,8 +296,20 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
     // ---------------------------------------------------------------- 侧滑栏
 
     @Override
-    public void requestOpenDrawer() {
-        openDrawer(true);
+    public void onDrawerDrag(float translationX) {
+        if (drawer == null) return;
+        drawer.animate().cancel();
+        drawer.setVisibility(View.VISIBLE);
+        drawer.setTranslationX(translationX);
+        scrim.setVisibility(View.VISIBLE);
+        float width = Math.max(drawer.getWidth(), dp(DRAWER_WIDTH_DP));
+        float progress = Math.max(0f, Math.min(1f, 1f + translationX / width));
+        scrim.setAlpha(progress);
+    }
+
+    @Override
+    public void onDrawerDragEnd(boolean open) {
+        animateDrawer(open, true);
     }
 
     void openDrawer(boolean animate) {
@@ -307,6 +339,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
             drawer.setTranslationX(open ? 0f : offset);
         }
         drawer.setVisibility(View.VISIBLE);
+        scrim.setAlpha(1f);
         scrim.setVisibility(open ? View.VISIBLE : View.GONE);
         drawerOpen = open;
     }
@@ -427,7 +460,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         help.setText("默认命令：" + fallback + "\n\n"
                 + APK_RUN_COMMAND + " 是编辑器内置命令，表示编译、打包并安装 APK。"
                 + "填写其它命令时，会在本项目的 Ubuntu 终端中执行，不走 APK 打包流程。");
-        help.setTextColor(getColor(R.color.m3_on_surface_variant));
+        help.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
         help.setTextSize(13);
         help.setLineSpacing(0, 1.15f);
         box.addView(help);
@@ -511,20 +544,193 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         return readProjectConfig().optString("kind", "");
     }
 
-    /** 编辑页右上角菜单：运行键参数 / 更新版本 / 关于捐助。 */
+    /** 编辑页右上角菜单：编辑器设置 / 主题（二级：跟随系统、配色方案、代码配色）/ 运行键参数 / 更新版本 / 关于。 */
     private void showTopMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
+        pm.getMenu().add("编辑器设置");
+        android.view.SubMenu themeMenu = pm.getMenu().addSubMenu("主题");
+        themeMenu.add("夜间模式跟随系统");
+        themeMenu.add("配色方案");
+        themeMenu.add("代码配色");
         pm.getMenu().add("运行键参数");
         pm.getMenu().add("更新版本");
-        pm.getMenu().add("关于捐助");
+        pm.getMenu().add("关于");
         pm.setOnMenuItemClickListener(item -> {
             String title = item.getTitle().toString();
-            if ("运行键参数".equals(title)) showRunSettings();
+            if ("编辑器设置".equals(title)) showEditorSettings();
+            else if ("夜间模式跟随系统".equals(title)) showFollowSystemSettings();
+            else if ("配色方案".equals(title)) showSchemeSettings();
+            else if ("代码配色".equals(title)) showSyntaxSettings();
+            else if ("运行键参数".equals(title)) showRunSettings();
             else if ("更新版本".equals(title)) showUpdateDialog();
-            else if ("关于捐助".equals(title)) showDonateDialog();
+            else if ("关于".equals(title)) showDonateDialog();
             return true;
         });
         pm.show();
+    }
+
+    /** 夜间模式是否跟随系统：默认不跟随，不跟随时由侧滑栏开关手动切换。 */
+    private void showFollowSystemSettings() {
+        boolean follow = ThemeSettings.getMode(this) == ThemeSettings.MODE_SYSTEM;
+        final String[] items = {"不跟随（手动切换）", "跟随系统"};
+        new AlertDialog.Builder(this)
+                .setTitle("夜间模式")
+                .setSingleChoiceItems(items, follow ? 1 : 0, (dialog, which) -> {
+                    ThemeSettings.setMode(this, which == 1
+                            ? ThemeSettings.MODE_SYSTEM
+                            : (ThemeSettings.isDark(this)
+                                    ? ThemeSettings.MODE_DARK : ThemeSettings.MODE_LIGHT));
+                    dialog.dismiss();
+                    recreate();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 配色方案：整体界面换色（按钮、背景、强调色）。 */
+    private void showSchemeSettings() {
+        final String[] items = {"蓝莓", "森林", "紫罗兰", "暖橙"};
+        new AlertDialog.Builder(this)
+                .setTitle("配色方案")
+                .setSingleChoiceItems(items, ThemeSettings.getScheme(this), (dialog, which) -> {
+                    ThemeSettings.setScheme(this, which);
+                    dialog.dismiss();
+                    recreate();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 代码配色：编辑器语法高亮的流行配色，和界面配色相互独立。 */
+    private void showSyntaxSettings() {
+        final String[] items = {"跟随界面", "One Dark", "Dracula", "Nord", "Solarized Light"};
+        int current = EditorSettings.prefs(this)
+                .getInt(KEY_SYNTAX_SCHEME, DEF_SYNTAX_SCHEME);
+        new AlertDialog.Builder(this)
+                .setTitle("代码配色")
+                .setSingleChoiceItems(items, current, (dialog, which) -> {
+                    EditorSettings.prefs(this).edit().putInt(KEY_SYNTAX_SCHEME, which).apply();
+                    dialog.dismiss();
+                    recreate();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    // ---------------------------------------------------------------- 编辑器设置
+
+    /**
+     * 编辑器设置弹窗：所有改动实时应用到当前编辑器并持久化，下次打开依然生效。
+     */
+    private void showEditorSettings() {
+        if (settingsDialog != null && settingsDialog.isShowing()) return;
+        SharedPreferences p = EditorSettings.prefs(this);
+
+        ScrollView scroll = new ScrollView(this);
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setPadding(dp(4), dp(8), dp(4), dp(12));
+        scroll.addView(box);
+
+        box.addView(sectionHeader("显示"));
+        box.addView(switchRow("自动换行", p.getBoolean(KEY_WORDWRAP, DEF_WORDWRAP), KEY_WORDWRAP));
+        box.addView(switchRow("显示行号", p.getBoolean(KEY_LINE_NUMBER, DEF_LINE_NUMBER), KEY_LINE_NUMBER));
+        box.addView(switchRow("高亮当前行", p.getBoolean(KEY_HIGHLIGHT_LINE, DEF_HIGHLIGHT_LINE), KEY_HIGHLIGHT_LINE));
+        box.addView(switchRow("高亮括号对", p.getBoolean(KEY_HIGHLIGHT_BRACKET, DEF_HIGHLIGHT_BRACKET), KEY_HIGHLIGHT_BRACKET));
+        box.addView(switchRow("显示空白字符", p.getBoolean(KEY_WHITESPACE, DEF_WHITESPACE), KEY_WHITESPACE));
+        box.addView(switchRow("字体连字", p.getBoolean(KEY_LIGATURE, DEF_LIGATURE), KEY_LIGATURE));
+        box.addView(seekRow("字体大小", "sp", MIN_TEXT_SIZE, MAX_TEXT_SIZE,
+                p.getInt(KEY_TEXT_SIZE, DEF_TEXT_SIZE), KEY_TEXT_SIZE));
+        box.addView(seekRow("行间距", "dp", MIN_LINE_SPACING, MAX_LINE_SPACING,
+                p.getInt(KEY_LINE_SPACING, DEF_LINE_SPACING), KEY_LINE_SPACING));
+
+        box.addView(sectionHeader("编辑"));
+        box.addView(switchRow("自动缩进", p.getBoolean(KEY_AUTO_INDENT, DEF_AUTO_INDENT), KEY_AUTO_INDENT));
+        box.addView(switchRow("括号自动配对", p.getBoolean(KEY_SYMBOL_PAIR, DEF_SYMBOL_PAIR), KEY_SYMBOL_PAIR));
+        box.addView(switchRow("双指缩放字体", p.getBoolean(KEY_SCALABLE, DEF_SCALABLE), KEY_SCALABLE));
+        box.addView(seekRow("缩进宽度", "格", MIN_TAB_WIDTH, MAX_TAB_WIDTH,
+                p.getInt(KEY_TAB_WIDTH, DEF_TAB_WIDTH), KEY_TAB_WIDTH));
+
+        box.addView(sectionHeader("滚动"));
+        box.addView(switchRow("粘性滚动", p.getBoolean(KEY_STICKY_SCROLL, DEF_STICKY_SCROLL), KEY_STICKY_SCROLL));
+        box.addView(switchRow("过度滚动", p.getBoolean(KEY_OVER_SCROLL, DEF_OVER_SCROLL), KEY_OVER_SCROLL));
+
+        settingsDialog = new AlertDialog.Builder(this)
+                .setTitle("编辑器设置")
+                .setView(scroll)
+                .setPositiveButton("完成", null)
+                .setNeutralButton("恢复默认", (d, w) -> {
+                    EditorSettings.reset(this);
+                    EditorSettings.applyAll(editor, this);
+                    Toast.makeText(this, "已恢复默认设置", Toast.LENGTH_SHORT).show();
+                })
+                .create();
+        settingsDialog.setOnDismissListener(d -> settingsDialog = null);
+        settingsDialog.show();
+    }
+
+    private View sectionHeader(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(13);
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setTextColor(ThemeSettings.color(this, R.attr.palette_primary));
+        tv.setPadding(dp(16), dp(14), dp(16), dp(2));
+        return tv;
+    }
+
+    private View switchRow(String title, boolean checked, final String key) {
+        android.widget.LinearLayout row = new android.widget.LinearLayout(this);
+        row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), 0, dp(16), 0);
+        row.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+        TextView tv = new TextView(this);
+        tv.setText(title);
+        tv.setTextSize(15);
+        tv.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface));
+        row.addView(tv, new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Switch sw = new Switch(this);
+        sw.setChecked(checked);
+        sw.setOnCheckedChangeListener((button, value) -> {
+            EditorSettings.prefs(this).edit().putBoolean(key, value).apply();
+            EditorSettings.applyAll(editor, this);
+        });
+        row.addView(sw);
+        return row;
+    }
+
+    private View seekRow(String title, String unit, int min, int max, int value, final String key) {
+        android.widget.LinearLayout col = new android.widget.LinearLayout(this);
+        col.setOrientation(android.widget.LinearLayout.VERTICAL);
+        col.setPadding(dp(16), dp(6), dp(16), dp(6));
+        final TextView tv = new TextView(this);
+        tv.setTextSize(14);
+        tv.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface));
+        final String label = title;
+        final String u = unit;
+        tv.setText(label + "：" + value + " " + u);
+        col.addView(tv);
+        final int lo = min;
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(max - min);
+        sb.setProgress(value - min);
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                int v = lo + progress;
+                tv.setText(label + "：" + v + " " + u);
+                if (fromUser) {
+                    EditorSettings.prefs(EditorActivity.this).edit().putInt(key, v).apply();
+                    EditorSettings.applyAll(editor, EditorActivity.this);
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) { }
+        });
+        col.addView(sb);
+        return col;
     }
 
     private static final String REPO_URL = "https://github.com/BO2023JAVA/zigeditor";
@@ -537,7 +743,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
 
         TextView info = new TextView(this);
         info.setTextSize(13);
-        info.setTextColor(getColor(R.color.m3_on_surface));
+        info.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface));
         info.setMovementMethod(LinkMovementMethod.getInstance());
         info.setText(updateInfoText(current, ubuntu, zig, "检查中…", "检查中…"));
 
@@ -573,12 +779,12 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
     private CharSequence updateInfoText(String current, String ubuntu, String zig,
                                         String latest, String stars) {
         StringBuilder s = new StringBuilder();
-        s.append("当前版本：").append(current).append("\n\n");
-        s.append("Ubuntu 运行时：").append(ubuntu).append("\n");
-        s.append("Zig 工具链：").append(zig).append("\n\n");
-        s.append("最新版本：").append(latest).append("\n");
-        s.append("Star 数：").append(stars).append("\n\n");
-        s.append("GitHub：").append(REPO_URL).append("\n\n");
+        s.append("当前版本：").append(current)
+                .append("   →   最新版本：").append(latest).append("\n");
+        s.append("GitHub：").append(REPO_URL).append("   ★ ").append(stars).append("\n\n");
+        s.append("当前环境：\n");
+        s.append("  Ubuntu 运行时：").append(ubuntu).append("\n");
+        s.append("  Zig 工具链：").append(zig).append("\n\n");
         s.append("如有版本问题（签名不一致无法覆盖安装等），请卸载旧版后重新安装最新版 APK。");
         SpannableString ss = new SpannableString(s.toString());
         int ls = s.indexOf(REPO_URL);
@@ -659,7 +865,7 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         author.setTextSize(17);
         author.setGravity(Gravity.CENTER);
         author.setPadding(0, dp(14), 0, dp(6));
-        author.setTextColor(getColor(R.color.m3_on_surface));
+        author.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface));
         box.addView(author);
 
         TextView bili = new TextView(this);
@@ -677,14 +883,38 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
         bili.setGravity(Gravity.CENTER);
         bili.setMovementMethod(LinkMovementMethod.getInstance());
         bili.setPadding(0, dp(6), 0, dp(8));
-        bili.setTextColor(getColor(R.color.m3_on_surface_variant));
+        bili.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
         box.addView(bili);
 
+        // QQ 群：点击唤起 QQ 群资料页
+        TextView qq = new TextView(this);
+        qq.setText("QQ 群：874639150（点击加入）");
+        qq.setTextSize(14);
+        qq.setGravity(Gravity.CENTER);
+        qq.setPadding(0, dp(2), 0, dp(10));
+        qq.setTextColor(ThemeSettings.color(this, R.attr.palette_primary));
+        qq.setOnClickListener(v -> openQqGroup("874639150"));
+        box.addView(qq);
+
         new AlertDialog.Builder(this)
-                .setTitle("关于捐助")
+                .setTitle("关于")
                 .setView(box)
-                .setPositiveButton("感谢支持", null)
+                .setPositiveButton("关闭", null)
                 .show();
+    }
+
+    /** 打开 QQ 群资料页；未安装 QQ 时把群号复制到剪贴板并提示。 */
+    private void openQqGroup(String uin) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(
+                    "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=" + uin
+                            + "&card_type=group&source=external")));
+        } catch (Exception e) {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("QQ群", uin));
+            Toast.makeText(this, "未安装 QQ，群号已复制：" + uin, Toast.LENGTH_LONG).show();
+        }
     }
 
     /** 长按文件树节点：重命名 / 删除。 */
@@ -932,8 +1162,8 @@ public class EditorActivity extends Activity implements DrawerRootLayout.Listene
             tv.setPadding(dp(12 + n.depth * 16), 0, dp(12), 0);
             // 单选高亮：M3 导航选中胶囊，同时保证深浅色主题下的文字对比度
             boolean selected = n.file.equals(selectedNode);
-            tv.setTextColor(getColor(selected ? R.color.m3_on_primary_container
-                    : n.dir ? R.color.m3_on_surface : R.color.m3_on_surface_variant));
+            tv.setTextColor(ThemeSettings.color(EditorActivity.this, selected ? R.attr.palette_on_primary_container
+                    : n.dir ? R.attr.palette_on_surface : R.attr.palette_on_surface_variant));
             tv.setBackgroundResource(selected ? R.drawable.m3_nav_indicator : 0);
             return tv;
         }

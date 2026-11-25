@@ -1,6 +1,5 @@
 package com.microui.zigeditor.terminal;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -22,6 +21,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.microui.zigeditor.ThemedActivity;
 import com.termux.terminal.TerminalColors;
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
@@ -48,7 +48,7 @@ import java.util.Properties;
  * 终端界面：内置 UI（不是插件），后端是 proot + Ubuntu rootfs。
  * 提供命令输入与编译日志输出，并在编译成功后接上「重打包 + 签名 + 安装」闭环。
  */
-public class TerminalActivity extends Activity {
+public class TerminalActivity extends ThemedActivity {
 
     /** 从编辑器侧滑栏进入时带上项目目录：默认进入后自动编译，false 时只 cd 到项目目录。 */
     public static final String EXTRA_PROJECT_DIR = "extra_project_dir";
@@ -359,9 +359,9 @@ public class TerminalActivity extends Activity {
     private void updateCtrlKey() {
         if (ctrlKey == null) return;
         ctrlKey.setText(ctrlArmed ? "Ctrl•" : "Ctrl");
-        ctrlKey.setTextColor(getColor(ctrlArmed
-                ? com.microui.zigeditor.R.color.m3_primary
-                : com.microui.zigeditor.R.color.m3_on_surface_variant));
+        ctrlKey.setTextColor(com.microui.zigeditor.ThemeSettings.color(this, ctrlArmed
+                ? com.microui.zigeditor.R.attr.palette_primary
+                : com.microui.zigeditor.R.attr.palette_on_surface_variant));
     }
 
     private void sendInput(String text) {
@@ -550,6 +550,8 @@ public class TerminalActivity extends Activity {
         final File src = projectDir != null ? projectDir : new File(new File(root, "projects"), "microui-template");
         final File out = new File(root, "out");
         final File sdl = new File(root, "sdl");
+        // 编译前按项目 config.json 的 zigVersion 切换工具链，避免用错版本
+        if (projectDir != null) ProotRunner.useZigForProject(this, projectDir);
         final BuildProfile profile = BuildProfile.of(src);
         final File template = new File(root, profile.templateFile);
 
@@ -570,9 +572,11 @@ public class TerminalActivity extends Activity {
                     ProotRunner.extractSdlLibs(template, sdl);
                 }
                 ProcessBuilder pb = ProotRunner.buildLib(this, src, out, sdl, profile);
-                int code = pipe(pb);
+                // 先清掉上一项目的残留产物，否则编译失败时会把旧 so 当成新产物打包
                 File so = new File(out, "libmicrozig.so");
-                if (!so.isFile()) {
+                so.delete();
+                int code = pipe(pb);
+                if (code != 0 || !so.isFile()) {
                     log("[编译失败] exit=" + code + "，未生成 " + so
                             + (code == 0 ? "（日志里有 can't sanitize binding 时表示绑定目录缺失）" : ""));
                     return;
@@ -614,6 +618,7 @@ public class TerminalActivity extends Activity {
                     + "\n新建项目时选「原生zig」会带上 build.zig + src/ 结构");
             return;
         }
+        ProotRunner.useZigForProject(this, dir);
         String zigVer = ProotRunner.zigCurrentId(this);
         log("\n=== 编译动态库（原生 zig → .so · proot Ubuntu + "
                 + (zigVer.isEmpty() ? "zig 默认包" : zigVer) + "） ===");

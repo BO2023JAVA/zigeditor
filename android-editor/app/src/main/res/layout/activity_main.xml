@@ -2,7 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/m3_surface"
+    android:background="?attr/palette_surface"
     android:orientation="vertical"
     android:paddingStart="20dp"
     android:paddingTop="16dp"
@@ -24,7 +24,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Zig 项目"
-                android:textColor="@color/m3_on_surface"
+                android:textColor="?attr/palette_on_surface"
                 android:textSize="24sp"
                 android:textStyle="bold" />
 
@@ -33,9 +33,22 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textColor="@color/m3_on_surface_variant"
+                android:textColor="?attr/palette_on_surface_variant"
                 android:textSize="12sp" />
         </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/import_project"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/m3_icon_button_tonal"
+            android:contentDescription="导入项目"
+            android:foreground="?android:attr/selectableItemBackgroundBorderless"
+            android:padding="11dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_import_project"
+            android:tint="?attr/palette_on_secondary_container" />
 
         <ImageButton
             android:id="@+id/open_packages"
@@ -48,7 +61,7 @@
             android:padding="11dp"
             android:scaleType="centerInside"
             android:src="@drawable/ic_build_wrench"
-            android:tint="@color/m3_on_primary_container" />
+            android:tint="?attr/palette_on_primary_container" />
     </LinearLayout>
 
     <ListView
@@ -74,7 +87,7 @@
         android:stateListAnimator="@null"
         android:text="新建项目"
         android:textAllCaps="false"
-        android:textColor="@color/m3_on_primary"
+        android:textColor="?attr/palette_on_primary"
         android:textSize="16sp" />
 
 </LinearLayout>

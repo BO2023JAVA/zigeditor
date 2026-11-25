@@ -1,12 +1,15 @@
 package com.microui.zigeditor;
 
-import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -22,19 +25,27 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 /**
  * 项目列表页：列出应用私有目录 files/zig 下的项目文件夹，点击进入编辑器。
  * 新建入口只负责建项目文件夹（并放一份 main.zig 模板），文件级的新建在编辑器侧滑栏里。
  */
-public class MainActivity extends Activity {
+public class MainActivity extends ThemedActivity {
 
     /** 新项目自带的 starter 文件（模板复制失败时的兜底）。 */
     private static final String SAMPLE_CODE = "const std = @import(\"std\");\n"
@@ -52,6 +63,9 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_ICON_FILE = "icon.png";
     private static final int REQ_ICON = 9001;
     private static final int REQ_NEW_ICON = 9002;
+    private static final int REQ_IMPORT_PROJECT = 9003;
+    /** 备份 zip 在系统下载目录下的子目录 */
+    private static final String BACKUP_SUBDIR = "backups";
 
     private File projectsRoot;
     private ProjectAdapter adapter;
@@ -93,6 +107,8 @@ public class MainActivity extends Activity {
         });
 
         findViewById(R.id.new_project).setOnClickListener(v -> showNewProjectDialog());
+        // 右上角导入：从 zip 备份恢复项目
+        findViewById(R.id.import_project).setOnClickListener(v -> pickProjectArchive());
         // 右上角扳手：进入包管理（Ubuntu 运行时 / Zig 工具链）
         findViewById(R.id.open_packages).setOnClickListener(v -> startActivity(
                 new Intent(this, com.microui.zigeditor.terminal.PackagesActivity.class)));
@@ -187,10 +203,10 @@ public class MainActivity extends Activity {
 
                 h.name = new TextView(MainActivity.this);
                 h.name.setTextSize(16);
-                h.name.setTextColor(getColor(R.color.m3_on_surface));
+                h.name.setTextColor(ThemeSettings.color(MainActivity.this, R.attr.palette_on_surface));
                 h.size = new TextView(MainActivity.this);
                 h.size.setTextSize(12);
-                h.size.setTextColor(getColor(R.color.m3_on_surface_variant));
+                h.size.setTextColor(ThemeSettings.color(MainActivity.this, R.attr.palette_on_surface_variant));
                 texts.addView(h.name);
                 texts.addView(h.size);
                 row.addView(texts);
@@ -324,6 +340,8 @@ public class MainActivity extends Activity {
 
     private void openProject(File dir) {
         Intent intent = new Intent(this, EditorActivity.class);
+        // 打开项目时按 config.json 的 zigVersion 自动切换工具链
+        com.microui.toolchain.ProotRunner.useZigForProject(this, dir);
         intent.putExtra(EditorActivity.EXTRA_PROJECT_DIR, dir.getAbsolutePath());
         startActivity(intent);
     }
@@ -339,9 +357,9 @@ public class MainActivity extends Activity {
         box.setOrientation(android.widget.LinearLayout.VERTICAL);
         box.setPadding(pad, pad, pad, 0);
 
-        EditText name = addField(box, "项目名（文件夹名）", "demo" + rnd);
-        EditText appName = addField(box, "应用名（桌面显示）", "demo" + rnd);
+        EditText name = addField(box, "项目名", "demo" + rnd);
         EditText pkg = addField(box, "包名（如 com.example.app）", "com.zigeditor.demo" + rnd);
+        EditText version = addField(box, "应用版本号（如 1.0.0）", "1.0");
 
         // 项目类型：决定是否带内置 UI 框架（图形界面 = microui + SDL；纯终端 = 只有 std）
         TextView kindCaption = new TextView(this);
@@ -367,13 +385,77 @@ public class MainActivity extends Activity {
         kindGroup.addView(nativeRadio);
         box.addView(kindGroup);
 
+        // Zig 版本：随项目写入 config.json，进入/编译项目时自动切换；灰色为未下载，点击去包管理
+        TextView zigCaption = new TextView(this);
+        zigCaption.setText("Zig 版本（灰色为未下载）");
+        zigCaption.setTextSize(12);
+        zigCaption.setPadding(0, dp(10), 0, 0);
+        box.addView(zigCaption);
+
+        java.util.List<String> zigInstalled =
+                com.microui.toolchain.ProotRunner.installedZigVersions(this);
+        java.util.List<String> zigOptions = new java.util.ArrayList<>(zigInstalled);
+        try (java.io.InputStream in = getAssets().open("packages-manifest.json")) {
+            java.io.ByteArrayOutputStream bout = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bout.write(buf, 0, n);
+            zigOptions = com.microui.toolchain.ProotRunner.availableZigVersions(this, bout.toString("UTF-8"));
+        } catch (Exception ignored) { }
+
+        RadioGroup zigGroup = new RadioGroup(this);
+        zigGroup.setOrientation(RadioGroup.HORIZONTAL);
+        java.util.Map<Integer, String> zigIdToVersion = new java.util.HashMap<>();
+        String curZig = com.microui.toolchain.ProotRunner.zigCurrentVersion(this);
+        final int[] lastInstalledId = {-1};
+        for (String v : zigOptions) {
+            RadioButton rb = new RadioButton(this);
+            rb.setId(View.generateViewId());
+            rb.setText(v);
+            boolean inst = zigInstalled.contains(v);
+            if (!inst) {
+                rb.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
+                rb.setAlpha(0.55f);
+            }
+            zigGroup.addView(rb);
+            zigIdToVersion.put(rb.getId(), v);
+            if (v.equals(curZig) || (lastInstalledId[0] == -1 && inst && curZig.isEmpty())) {
+                rb.setChecked(true);
+                lastInstalledId[0] = rb.getId();
+            }
+        }
+        box.addView(zigGroup);
+        zigGroup.setOnCheckedChangeListener((g, checkedId) -> {
+            if (checkedId == -1) return;
+            String v = zigIdToVersion.get(checkedId);
+            if (v == null) return;
+            if (zigInstalled.contains(v)) {
+                lastInstalledId[0] = checkedId;
+            } else {
+                // 未下载版本不选中，恢复上次选择并跳包管理下载
+                g.check(lastInstalledId[0]);
+                startActivity(new Intent(this,
+                        com.microui.zigeditor.terminal.PackagesActivity.class));
+            }
+        });
+        // 原生 zig 的 zig init 在 0.17.x 会崩溃，选原生类型时自动挑已安装的 0.16
+        kindGroup.setOnCheckedChangeListener((g, checkedId) -> {
+            if (checkedId != nativeRadio.getId()) return;
+            for (java.util.Map.Entry<Integer, String> e : zigIdToVersion.entrySet()) {
+                if (e.getValue().startsWith("0.16") && zigInstalled.contains(e.getValue())) {
+                    zigGroup.check(e.getKey());
+                    break;
+                }
+            }
+        });
+
         TextView kindHint = new TextView(this);
         kindHint.setText("图形界面：内置 microui + SDL，适合做应用/游戏\n"
                 + "纯终端：只用 Zig 标准库，输出显示在 APK 的终端窗口里\n"
                 + "原生zig：空目录，创建后进终端 zig init 生成结构，可编译 .so 到 Download\n"
-                + "提示：原生zig 只能用 Zig 0.16 创建，0.17.x 在部分 ARM 手机执行 zig init 会崩溃");
+                + "提示：原生zig 建议用 Zig 0.16 创建，0.17.x 在部分 ARM 手机执行 zig init 会崩溃");
         kindHint.setTextSize(11);
-        kindHint.setTextColor(getColor(R.color.m3_on_surface_variant));
+        kindHint.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
         box.addView(kindHint);
 
         // 应用图标：默认内置吉祥物，可在此换图，右侧实时预览
@@ -389,19 +471,33 @@ public class MainActivity extends Activity {
         iconRow.addView(newIconPreview);
         Button pickIcon = new Button(this);
         LinearLayout.LayoutParams pickLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(40));
         pickLp.leftMargin = dp(12);
         pickIcon.setLayoutParams(pickLp);
         pickIcon.setText("选择图标");
+        // M3 tonal 胶囊按钮，与应用其它按钮统一，去掉原生 Button 的灰底和阴影
+        pickIcon.setBackgroundResource(R.drawable.m3_button_tonal);
+        pickIcon.setTextColor(ThemeSettings.color(this, R.attr.palette_on_secondary_container));
+        pickIcon.setAllCaps(false);
+        pickIcon.setTextSize(14);
+        pickIcon.setStateListAnimator(null);
+        pickIcon.setMinWidth(0);
+        pickIcon.setMinHeight(0);
+        pickIcon.setMinimumWidth(0);
+        pickIcon.setMinimumHeight(0);
+        pickIcon.setPadding(dp(16), 0, dp(16), 0);
+        android.util.TypedValue ripple = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
+        pickIcon.setForeground(getDrawable(ripple.resourceId));
         pickIcon.setOnClickListener(v -> pickNewProjectIcon());
         iconRow.addView(pickIcon);
         box.addView(iconRow);
 
+        android.widget.ScrollView newProjectScroll = new android.widget.ScrollView(this);
+        newProjectScroll.addView(box);
         newProjectDialog = new AlertDialog.Builder(this)
                 .setTitle("新建项目")
-                .setMessage("按所选类型带上 HelloWorld 模板，可直接编译打包成 APK。\n"
-                        + "应用图标默认是内置吉祥物，也可以现在选择你自己的图片。")
-                .setView(box)
+                .setView(newProjectScroll)
                 .setPositiveButton("创建", (dialog, which) -> {
                     String nameText = name.getText().toString().trim();
                     if (nameText.isEmpty()) return;
@@ -409,8 +505,9 @@ public class MainActivity extends Activity {
                         Toast.makeText(this, "名称不能包含路径分隔符", Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    String app = appName.getText().toString().trim();
                     String p = pkg.getText().toString().trim();
+                    String ver = version.getText().toString().trim();
+                    if (ver.isEmpty()) ver = "1.0";
                     if (!p.matches("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")) {
                         Toast.makeText(this,
                                 "包名不合法：需形如 com.example.app（字母开头，可含数字和下划线）",
@@ -421,38 +518,26 @@ public class MainActivity extends Activity {
                     String kind = guiRadio.isChecked() ? "gui"
                             : (consoleRadio.isChecked() ? "console" : "native");
                     boolean isNative = "native".equals(kind);
-                    if (isNative && !com.microui.toolchain.ProotRunner.isZig016(this)) {
+                    String zigVer = zigIdToVersion.get(zigGroup.getCheckedRadioButtonId());
+                    if (zigVer == null) zigVer = "";
+                    if (isNative && (!zigVer.startsWith("0.16")
+                            || !com.microui.toolchain.ProotRunner.useZigVersion(this, zigVer))) {
+                        final String fName = nameText, fPkg = p, fVer = ver, fKind = kind, fZig = zigVer;
                         new AlertDialog.Builder(this)
-                                .setTitle("原生项目需要 Zig 0.16")
-                                .setMessage("原生项目只能用 Zig 0.16 创建（0.17.x 在部分 ARM 手机执行 zig init 会崩溃）。\n\n请先在「包管理」中安装并切换到 Zig 0.16.0，再创建原生项目。")
-                                .setPositiveButton("去包管理", (d, w) -> startActivity(new Intent(this,
+                                .setTitle("建议使用 Zig 0.16 创建")
+                                .setMessage("原生项目推荐用 Zig 0.16 创建：0.17.x 在部分 ARM 手机执行 zig init 会崩溃或卡住。\n\n"
+                                        + "建议先在「包管理」中切换至 Zig 0.16.0 再创建。\n\n"
+                                        + "执意继续将使用 Zig " + (zigVer.isEmpty() ? "当前版本" : zigVer)
+                                        + " 创建；若终端里 zig init 崩溃或一直无响应，请删除项目并切换至 Zig 0.16.0 后重试。")
+                                .setPositiveButton("继续创建", (d, w) ->
+                                        doCreateProject(fName, fPkg, fVer, fKind, fZig))
+                                .setNeutralButton("去包管理", (d, w) -> startActivity(new Intent(this,
                                         com.microui.zigeditor.terminal.PackagesActivity.class)))
                                 .setNegativeButton("取消", null)
                                 .show();
                         return;
                     }
-                    File dir = new File(projectsRoot, nameText);
-                    if (dir.exists() || !dir.mkdirs()) {
-                        Toast.makeText(this, "创建失败：同名文件夹已存在或目录不可写",
-                                Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    // 按所选类型复制模板（gui=core/+ui/，console=core/+app.zig）；
-                    // 原生zig 不预设文件：空目录创建后跳终端 zig init 生成结构
-                    String title = app.isEmpty() ? nameText : app;
-                    if (!isNative && !copyTemplate(dir, title, kind))
-                        writeSample(new File(dir, "main.zig"));
-                    if (!copyChosenIcon(dir)) copyDefaultIcon(dir);
-                    writeMeta(dir, title, p, DEFAULT_ICON_FILE, kind);
-                    pendingNewIconUri = null;
-                    newIconPreview = null;
-                    refresh();
-                    if (isNative) {
-                        openTerminalForInit(dir);
-                    } else {
-                        // 图形界面 / 纯终端：创建后直接进入编辑页
-                        openProject(dir);
-                    }
+                    doCreateProject(nameText, p, ver, kind, zigVer);
                 })
                 .setNegativeButton("取消", (dialog, which) -> {
                     pendingNewIconUri = null;
@@ -461,6 +546,36 @@ public class MainActivity extends Activity {
                 .create();
         newProjectDialog.setOnDismissListener(d -> newProjectDialog = null);
         newProjectDialog.show();
+    }
+
+    /** 校验通过后真正建项目：切版本、建目录、带模板、写配置并进入项目。 */
+    private void doCreateProject(String nameText, String p, String ver, String kind, String zigVer) {
+        boolean isNative = "native".equals(kind);
+        // 创建即切到项目所选版本，保证后续 zig init / 编译用的是同一工具链
+        if (!zigVer.isEmpty())
+            com.microui.toolchain.ProotRunner.useZigVersion(this, zigVer);
+        File dir = new File(projectsRoot, nameText);
+        if (dir.exists() || !dir.mkdirs()) {
+            Toast.makeText(this, "创建失败：同名文件夹已存在或目录不可写",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // 按所选类型复制模板（gui=core/+ui/，console=core/+app.zig）；
+        // 原生zig 不预设文件：空目录创建后跳终端 zig init 生成结构
+        // 项目名与应用名统一，config.json 里的 appName 就是项目名
+        if (!isNative && !copyTemplate(dir, nameText, kind))
+            writeSample(new File(dir, "main.zig"));
+        if (!copyChosenIcon(dir)) copyDefaultIcon(dir);
+        writeMeta(dir, nameText, p, DEFAULT_ICON_FILE, kind, ver, zigVer);
+        pendingNewIconUri = null;
+        newIconPreview = null;
+        refresh();
+        if (isNative) {
+            openTerminalForInit(dir);
+        } else {
+            // 图形界面 / 纯终端：创建后直接进入编辑页
+            openProject(dir);
+        }
     }
 
     /** 弹窗里加「标签 + 输入框」一组（输入框有默认值时提示语看不见，所以用独立标签）。 */
@@ -489,9 +604,10 @@ public class MainActivity extends Activity {
     private void showProjectMenu(File dir) {
         new AlertDialog.Builder(this)
                 .setTitle(dir.getName())
-                .setItems(new String[]{"编辑项目信息", "设置应用图标", "删除项目"}, (d, which) -> {
+                .setItems(new String[]{"编辑项目信息", "设置应用图标", "备份项目", "删除项目"}, (d, which) -> {
                     if (which == 0) showProjectEditDialog(dir);
                     else if (which == 1) pickProjectIcon(dir);
+                    else if (which == 2) backupProject(dir);
                     else confirmDeleteProject(dir);
                 })
                 .show();
@@ -545,6 +661,291 @@ public class MainActivity extends Activity {
         return f.delete();
     }
 
+    // ------------------------------------------------------- 备份 / 导入
+
+    /** 长按项目 → 备份项目：打包成 zip 放到系统「下载/Download/backups」，完成后提示实际路径。 */
+    private void backupProject(File dir) {
+        Toast.makeText(this, "正在备份…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            File tmp = new File(getCacheDir(), dir.getName() + ".zip");
+            String name = dir.getName() + "-"
+                    + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".zip";
+            String where = null;
+            String error;
+            try {
+                zipDir(dir, tmp);
+                where = saveBackup(tmp, name);
+                error = where == null ? "无法写入 下载/Download/" + BACKUP_SUBDIR : null;
+            } catch (Exception e) {
+                error = e.getMessage() == null ? e.toString() : e.getMessage();
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
+            final String w = where;
+            final String err = error;
+            runOnUiThread(() -> {
+                if (w != null) {
+                    Toast.makeText(MainActivity.this, "备份已保存：" + w, Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(MainActivity.this, "备份失败：" + err, Toast.LENGTH_LONG).show();
+                }
+            });
+        }, "backup-project").start();
+    }
+
+    /** 递归打包项目目录（跳过构建缓存，避免备份包体积过大）。 */
+    private static void zipDir(File dir, File out) throws IOException {
+        try (ZipOutputStream zos = new ZipOutputStream(
+                new java.io.BufferedOutputStream(new FileOutputStream(out)))) {
+            zipInto(zos, dir, "");
+        }
+    }
+
+    private static void zipInto(ZipOutputStream zos, File dir, String prefix) throws IOException {
+        File[] kids = dir.listFiles();
+        if (kids == null) return;
+        for (File f : kids) {
+            String name = prefix + f.getName();
+            if (f.isDirectory()) {
+                if (isBuildCache(f.getName())) continue;
+                zos.putNextEntry(new ZipEntry(name + "/"));
+                zos.closeEntry();
+                zipInto(zos, f, name + "/");
+            } else {
+                zos.putNextEntry(new ZipEntry(name));
+                try (FileInputStream in = new FileInputStream(f)) {
+                    byte[] buf = new byte[65536];
+                    int k;
+                    while ((k = in.read(buf)) > 0) zos.write(buf, 0, k);
+                }
+                zos.closeEntry();
+            }
+        }
+    }
+
+    private static boolean isBuildCache(String name) {
+        return ".zig-cache".equals(name) || "zig-cache".equals(name) || "zig-out".equals(name);
+    }
+
+    /** 备份 zip 落到公共「下载/Download/backups」：API 29+ 走 MediaStore，低版本退回应用外部目录。返回提示用路径。 */
+    private String saveBackup(File zip, String name) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.Downloads.DISPLAY_NAME, name);
+                v.put(MediaStore.Downloads.MIME_TYPE, "application/zip");
+                v.put(MediaStore.Downloads.RELATIVE_PATH,
+                        Environment.DIRECTORY_DOWNLOADS + "/" + BACKUP_SUBDIR);
+                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (uri != null) {
+                    try (java.io.OutputStream out = getContentResolver().openOutputStream(uri);
+                         FileInputStream in = new FileInputStream(zip)) {
+                        if (out == null) throw new IOException("无法写入下载目录");
+                        byte[] buf = new byte[65536];
+                        int k;
+                        while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+                    }
+                    return "下载/Download/" + BACKUP_SUBDIR + "/" + name;
+                }
+            } catch (Exception ignored) {
+                // 落到下面的外部目录兜底
+            }
+        }
+        File ext = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (ext == null) return null;
+        File dst = new File(new File(ext, BACKUP_SUBDIR), name);
+        File parent = dst.getParentFile();
+        if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) return null;
+        try (FileInputStream in = new FileInputStream(zip);
+             FileOutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[65536];
+            int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+            return dst.getAbsolutePath();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** 右上角导入：选一个 zip 备份，解压成新项目。 */
+    private void pickProjectArchive() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(Intent.createChooser(i, "选择项目备份(zip)"), REQ_IMPORT_PROJECT);
+        } catch (Exception e) {
+            Toast.makeText(this, "无法打开文件选择器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void importProjectArchive(Uri uri) {
+        Toast.makeText(this, "正在导入…", Toast.LENGTH_SHORT).show();
+        final String fallbackName = archiveBaseName(uri);
+        new Thread(() -> {
+            File tmpZip = new File(getCacheDir(), "import-" + System.currentTimeMillis() + ".zip");
+            File stage = new File(getCacheDir(), "import-" + System.currentTimeMillis() + "-dir");
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 FileOutputStream out = new FileOutputStream(tmpZip)) {
+                if (in == null) throw new IOException("无法读取所选文件");
+                byte[] buf = new byte[65536];
+                int k;
+                while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+            } catch (Exception e) {
+                //noinspection ResultOfMethodCallIgnored
+                tmpZip.delete();
+                toastImportError(e);
+                return;
+            }
+            try {
+                if (!stage.mkdirs()) throw new IOException("无法创建临时目录");
+                if (unzipInto(tmpZip, stage) == 0)
+                    throw new IOException("压缩包里没有文件，不是有效的项目备份");
+                // 项目名以 config.json 的 appName 为准；没有配置才退回 zip 文件名
+                final String name = importedProjectName(stage, fallbackName);
+                runOnUiThread(() -> {
+                    File target = new File(projectsRoot, name);
+                    if (target.exists()) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("覆盖项目")
+                                .setMessage("项目「" + name + "」已存在，导入将覆盖原有内容，是否继续？")
+                                .setPositiveButton("覆盖", (d, w) -> finishImport(stage, tmpZip, target, name, true))
+                                .setNegativeButton("取消", (d, w) -> discardImport(stage, tmpZip))
+                                .setOnCancelListener(d -> discardImport(stage, tmpZip))
+                                .show();
+                    } else {
+                        finishImport(stage, tmpZip, target, name, false);
+                    }
+                });
+            } catch (Exception e) {
+                deleteRecursive(stage);
+                //noinspection ResultOfMethodCallIgnored
+                tmpZip.delete();
+                toastImportError(e);
+            }
+        }, "import-project").start();
+    }
+
+    private void discardImport(File stage, File tmpZip) {
+        deleteRecursive(stage);
+        //noinspection ResultOfMethodCallIgnored
+        tmpZip.delete();
+    }
+
+    private void toastImportError(Exception e) {
+        String err = e.getMessage() == null ? e.toString() : e.getMessage();
+        runOnUiThread(() -> {
+            refresh();
+            Toast.makeText(MainActivity.this, "导入失败：" + err, Toast.LENGTH_LONG).show();
+        });
+    }
+
+    /** 覆盖确认后落盘：先清掉旧项目，再把解包结果移动到项目目录。 */
+    private void finishImport(File stage, File tmpZip, File target, String name, boolean overwrite) {
+        new Thread(() -> {
+            String error = null;
+            boolean created = false;
+            try {
+                if (overwrite) {
+                    deleteRecursive(target);
+                    if (target.exists()) throw new IOException("原项目删除失败，无法覆盖");
+                }
+                if (!stage.renameTo(target)) {
+                    // 移动失败（跨分区等）时直接从 zip 解到目标目录
+                    created = true;
+                    if (!target.mkdirs() || unzipInto(tmpZip, target) == 0)
+                        throw new IOException("无法写入项目目录");
+                    deleteRecursive(stage);
+                }
+            } catch (Exception e) {
+                error = e.getMessage() == null ? e.toString() : e.getMessage();
+                deleteRecursive(stage);
+                if (created) deleteRecursive(target);
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                tmpZip.delete();
+            }
+            final String err = error;
+            runOnUiThread(() -> {
+                refresh();
+                Toast.makeText(MainActivity.this,
+                        err != null ? "导入失败：" + err
+                                : (overwrite ? "已覆盖导入项目：" : "已导入项目：") + name,
+                        Toast.LENGTH_LONG).show();
+            });
+        }, "import-project-write").start();
+    }
+
+    /** 导入的项目名：优先 config.json 的 appName（与项目名统一），缺失时用 zip 文件名。 */
+    private String importedProjectName(File stage, String fallback) {
+        String name = null;
+        try {
+            File f = new File(stage, CONFIG_NAME);
+            if (!f.isFile()) f = new File(stage, CONFIG_OLD);
+            if (f.isFile()) {
+                org.json.JSONObject o = new org.json.JSONObject(new String(
+                        java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+                String app = o.optString("appName", "").trim();
+                if (!app.isEmpty()) name = app;
+            }
+        } catch (Exception ignored) { }
+        if (name == null) name = fallback;
+        name = name.replaceAll("[\\\\/:*?\"<>|\\s]", "_").trim();
+        return name.isEmpty() ? "imported" : name;
+    }
+
+    /** 取所选 zip 的显示名（去掉 .zip）作为项目名，过滤掉不能做目录名的字符。 */
+    private String archiveBaseName(Uri uri) {
+        String name = null;
+        try (android.database.Cursor c = getContentResolver().query(uri,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) name = c.getString(0);
+        } catch (Exception ignored) {
+        }
+        if (name == null) name = uri.getLastPathSegment();
+        if (name == null) name = "imported";
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) name = name.substring(slash + 1);
+        if (name.toLowerCase(Locale.ROOT).endsWith(".zip")) name = name.substring(0, name.length() - 4);
+        name = name.replaceAll("[\\\\/:*?\"<>|\\s]", "_").trim();
+        return name.isEmpty() ? "imported" : name;
+    }
+
+    /** 解压到项目目录，拒绝 .. 与绝对路径等越界条目；返回写出的文件数。 */
+    private static int unzipInto(File zip, File destDir) throws IOException {
+        String root = destDir.getCanonicalPath();
+        int files = 0;
+        try (ZipInputStream zis = new ZipInputStream(
+                new java.io.BufferedInputStream(new FileInputStream(zip)))) {
+            ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                String name = e.getName().replace('\\', '/');
+                if (name.isEmpty() || name.startsWith("__MACOSX/")) continue;
+                File out = new File(destDir, name);
+                String path = out.getCanonicalPath();
+                if (!path.equals(root) && !path.startsWith(root + File.separator)) {
+                    throw new IOException("压缩包包含非法路径：" + name);
+                }
+                if (e.isDirectory()) {
+                    if (!out.isDirectory() && !out.mkdirs()) throw new IOException("无法创建目录：" + name);
+                    continue;
+                }
+                File parent = out.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("无法创建目录：" + name);
+                }
+                try (FileOutputStream fos = new FileOutputStream(out)) {
+                    byte[] buf = new byte[65536];
+                    int k;
+                    while ((k = zis.read(buf)) > 0) fos.write(buf, 0, k);
+                }
+                files++;
+            }
+        }
+        return files;
+    }
+
     /** 长按项目：修改项目名（文件夹）、应用名、包名。 */
     private void showProjectEditDialog(File dir) {
         String[] meta = readMeta(dir);
@@ -553,11 +954,11 @@ public class MainActivity extends Activity {
         int pad = dp(16);
         box.setPadding(pad, pad, pad, 0);
 
-        EditText name = addField(box, "项目名（文件夹名）", dir.getName());
-        EditText appName = addField(box, "应用名（桌面显示）",
-                meta[1] != null ? meta[1] : dir.getName());
+        EditText name = addField(box, "项目名", dir.getName());
         EditText pkg = addField(box, "包名（如 com.example.app）",
                 meta[0] != null ? meta[0] : "com.zigeditor.demo" + random4());
+        EditText version = addField(box, "应用版本号（如 1.0.0）",
+                meta[4] != null ? meta[4] : "1.0");
 
         new AlertDialog.Builder(this)
                 .setTitle("编辑项目")
@@ -568,8 +969,9 @@ public class MainActivity extends Activity {
                         Toast.makeText(this, "项目名不能为空或包含路径分隔符", Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    String app = appName.getText().toString().trim();
                     String p = pkg.getText().toString().trim();
+                    String ver = version.getText().toString().trim();
+                    if (ver.isEmpty()) ver = "1.0";
                     if (!p.matches("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")) {
                         Toast.makeText(this,
                                 "包名不合法：需形如 com.example.app（字母开头，可含数字和下划线）",
@@ -588,26 +990,28 @@ public class MainActivity extends Activity {
                         }
                     }
                     String kind = meta[3] != null ? meta[3] : "gui";
-                    writeMeta(target, app.isEmpty() ? nameText : app, p, readMeta(target)[2], kind);
+                    // Zig 版本以 config.json 为准，编辑页不再提供修改；项目名即应用名
+                    writeMeta(target, nameText, p, readMeta(target)[2], kind, ver, meta[5]);
                     refresh();
                 })
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    /** 读项目配置：[0]=包名，[1]=应用名，[2]=图标文件名，[3]=项目类型（缺失为 null）。优先 config.json，兼容旧 microui.json。 */
+    /** 读项目配置：[0]=包名，[1]=应用名，[2]=图标文件名，[3]=项目类型，[4]=应用版本号，[5]=Zig 版本（缺失为 null）。优先 config.json，兼容旧 microui.json。 */
     private String[] readMeta(File dir) {
         File f = new File(dir, CONFIG_NAME);
         if (!f.isFile()) f = new File(dir, CONFIG_OLD);
-        if (!f.isFile()) return new String[]{null, null, null, null};
+        if (!f.isFile()) return new String[]{null, null, null, null, null, null};
         try {
             String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
                     StandardCharsets.UTF_8);
             org.json.JSONObject o = new org.json.JSONObject(s);
             return new String[]{o.optString("package", null), o.optString("appName", null),
-                    o.optString("icon", null), o.optString("kind", null)};
+                    o.optString("icon", null), o.optString("kind", null),
+                    o.optString("versionName", null), o.optString("zigVersion", null)};
         } catch (Exception e) {
-            return new String[]{null, null, null, null};
+            return new String[]{null, null, null, null, null, null};
         }
     }
 
@@ -615,8 +1019,9 @@ public class MainActivity extends Activity {
         return String.format(java.util.Locale.US, "%04d", new java.util.Random().nextInt(10000));
     }
 
-    /** 写项目配置：应用名 + 包名 + 图标文件名 + 项目类型；写完顺手删掉旧的 microui.json。 */
-    private void writeMeta(File dir, String appName, String pkg, String icon, String kind) {
+    /** 写项目配置：应用名 + 包名 + 版本号 + 图标文件名 + 项目类型 + Zig 版本；写完顺手删掉旧的 microui.json。 */
+    private void writeMeta(File dir, String appName, String pkg, String icon, String kind,
+                           String version, String zigVersion) {
         try {
             org.json.JSONObject o = new org.json.JSONObject();
             File current = new File(dir, CONFIG_NAME);
@@ -627,8 +1032,10 @@ public class MainActivity extends Activity {
             }
             o.put("appName", appName);
             o.put("package", pkg);
+            if (version != null && !version.isEmpty()) o.put("versionName", version);
             if (icon != null) o.put("icon", icon);
             if (kind != null) o.put("kind", kind);
+            if (zigVersion != null && !zigVersion.isEmpty()) o.put("zigVersion", zigVersion);
             try (FileOutputStream out = new FileOutputStream(new File(dir, CONFIG_NAME))) {
                 out.write(o.toString(2).getBytes(StandardCharsets.UTF_8));
             }
@@ -668,6 +1075,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        // 右上角导入：选完 zip 后拷贝并解压成新项目
+        if (requestCode == REQ_IMPORT_PROJECT) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                importProjectArchive(data.getData());
+            }
+            return;
+        }
         // 新建对话框里选的图标：只更新预览，创建时再落盘
         if (requestCode == REQ_NEW_ICON) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
@@ -710,6 +1124,7 @@ public class MainActivity extends Activity {
                 String[] m = readMeta(dir);
                 if (m[0] != null) o.put("package", m[0]);
                 if (m[1] != null) o.put("appName", m[1]);
+                o.put("versionName", m[4] != null ? m[4] : "1.0");
                 o.put("kind", m[3] != null ? m[3] : "gui");
             }
             o.put("icon", DEFAULT_ICON_FILE);

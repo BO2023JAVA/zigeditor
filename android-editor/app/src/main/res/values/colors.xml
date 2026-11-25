@@ -16,4 +16,55 @@
     <color name="m3_outline_variant">#C4C6D0</color>
     <color name="m3_error">#BA1A1A</color>
     <color name="m3_on_error">#FFFFFF</color>
+
+    <!-- 森林（light） -->
+    <color name="forest_primary">#386A45</color>
+    <color name="forest_on_primary">#FFFFFF</color>
+    <color name="forest_primary_container">#BAF2C4</color>
+    <color name="forest_on_primary_container">#00210D</color>
+    <color name="forest_secondary_container">#D5E8D5</color>
+    <color name="forest_on_secondary_container">#10200F</color>
+    <color name="forest_surface">#F7FBF4</color>
+    <color name="forest_surface_container_low">#F1F7EE</color>
+    <color name="forest_surface_container">#EAF0E7</color>
+    <color name="forest_surface_container_high">#E4EAE1</color>
+    <color name="forest_on_surface">#191D17</color>
+    <color name="forest_on_surface_variant">#424940</color>
+    <color name="forest_outline_variant">#C2C9BE</color>
+    <color name="forest_error">#BA1A1A</color>
+    <color name="forest_on_error">#FFFFFF</color>
+
+    <!-- 紫罗兰（light） -->
+    <color name="violet_primary">#6B4E9B</color>
+    <color name="violet_on_primary">#FFFFFF</color>
+    <color name="violet_primary_container">#EBDCFF</color>
+    <color name="violet_on_primary_container">#251046</color>
+    <color name="violet_secondary_container">#E8DEF8</color>
+    <color name="violet_on_secondary_container">#1D192B</color>
+    <color name="violet_surface">#FBF8FF</color>
+    <color name="violet_surface_container_low">#F6F1FB</color>
+    <color name="violet_surface_container">#F0EAF6</color>
+    <color name="violet_surface_container_high">#EAE4F0</color>
+    <color name="violet_on_surface">#1C1B1F</color>
+    <color name="violet_on_surface_variant">#49454F</color>
+    <color name="violet_outline_variant">#CAC4D0</color>
+    <color name="violet_error">#BA1A1A</color>
+    <color name="violet_on_error">#FFFFFF</color>
+
+    <!-- 暖橙（light） -->
+    <color name="sunset_primary">#8B5000</color>
+    <color name="sunset_on_primary">#FFFFFF</color>
+    <color name="sunset_primary_container">#FFDDB8</color>
+    <color name="sunset_on_primary_container">#2C1600</color>
+    <color name="sunset_secondary_container">#FFE0C2</color>
+    <color name="sunset_on_secondary_container">#2C1600</color>
+    <color name="sunset_surface">#FFF8F3</color>
+    <color name="sunset_surface_container_low">#FCF2EA</color>
+    <color name="sunset_surface_container">#F7ECE2</color>
+    <color name="sunset_surface_container_high">#F1E6DB</color>
+    <color name="sunset_on_surface">#201A16</color>
+    <color name="sunset_on_surface_variant">#514539</color>
+    <color name="sunset_outline_variant">#D4C3B4</color>
+    <color name="sunset_error">#BA1A1A</color>
+    <color name="sunset_on_error">#FFFFFF</color>
 </resources>

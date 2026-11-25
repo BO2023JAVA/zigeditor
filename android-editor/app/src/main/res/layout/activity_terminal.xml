@@ -3,14 +3,14 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@color/m3_surface">
+    android:background="?attr/palette_surface">
 
     <TextView
         android:id="@+id/terminal_env"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="8dp"
-        android:textColor="@color/m3_primary"
+        android:textColor="?attr/palette_primary"
         android:textSize="12sp"
         android:text="检查 proot / rootfs / zig ..." />
 
@@ -20,7 +20,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="@color/m3_surface"
+        android:background="?attr/palette_surface"
         android:focusable="true"
         android:focusableInTouchMode="true" />
 
@@ -28,7 +28,7 @@
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/m3_surface_container"
+        android:background="?attr/palette_surface_container"
         android:scrollbars="none">
 
         <LinearLayout
@@ -44,7 +44,7 @@
                 android:minWidth="48dp"
                 android:text="Tab"
                 android:textAllCaps="false"
-                android:textColor="@color/m3_on_surface_variant" />
+                android:textColor="?attr/palette_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_up"
@@ -53,7 +53,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="↑"
-                android:textColor="@color/m3_on_surface_variant" />
+                android:textColor="?attr/palette_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_down"
@@ -62,7 +62,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="↓"
-                android:textColor="@color/m3_on_surface_variant" />
+                android:textColor="?attr/palette_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_left"
@@ -71,7 +71,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="←"
-                android:textColor="@color/m3_on_surface_variant" />
+                android:textColor="?attr/palette_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_right"
@@ -80,7 +80,7 @@
                 android:layout_height="wrap_content"
                 android:minWidth="48dp"
                 android:text="→"
-                android:textColor="@color/m3_on_surface_variant" />
+                android:textColor="?attr/palette_on_surface_variant" />
 
             <Button
                 android:id="@+id/btn_ctrl"
@@ -90,7 +90,7 @@
                 android:minWidth="56dp"
                 android:text="Ctrl"
                 android:textAllCaps="false"
-                android:textColor="@color/m3_primary" />
+                android:textColor="?attr/palette_primary" />
 
             <Button
                 android:id="@+id/btn_pkgs"
@@ -100,7 +100,7 @@
                 android:minWidth="72dp"
                 android:text="包管理"
                 android:textAllCaps="false"
-                android:textColor="@color/m3_primary" />
+                android:textColor="?attr/palette_primary" />
         </LinearLayout>
     </HorizontalScrollView>
 

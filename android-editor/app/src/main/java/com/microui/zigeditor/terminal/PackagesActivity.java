@@ -1,6 +1,5 @@
 package com.microui.zigeditor.terminal;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -17,6 +16,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.microui.zigeditor.ThemedActivity;
 import com.microui.toolchain.AndroidToolchain;
 import com.microui.toolchain.DownloadConfig;
 import com.microui.toolchain.PackageJobs;
@@ -51,7 +51,7 @@ import java.util.Set;
  * 依赖策略：除 ubuntu-runtime 外，其他包的 manifest 声明 depends。
  * 未装依赖时条目置灰并提示；点安装会自动先装 ubuntu-runtime，装完续装目标包。
  */
-public class PackagesActivity extends Activity {
+public class PackagesActivity extends ThemedActivity {
 
     private static final int REQ_IMPORT = 11;
     private static final String PREF = "pkgs";
@@ -96,6 +96,8 @@ public class PackagesActivity extends Activity {
         findViewById(com.microui.zigeditor.R.id.pkg_refresh).setOnClickListener(v -> loadIndex());
         findViewById(com.microui.zigeditor.R.id.pkg_repo).setOnClickListener(v -> editRepo());
         findViewById(com.microui.zigeditor.R.id.pkg_import).setOnClickListener(v -> pickArchive());
+        findViewById(com.microui.zigeditor.R.id.pkg_zig_top).setOnClickListener(v -> showZigTop());
+        loadZigDevProgress();
 
         loadIndex();
     }
@@ -111,6 +113,75 @@ public class PackagesActivity extends Activity {
     protected void onPause() {
         jobs.removeListener(onJobsChanged);
         super.onPause();
+    }
+
+    /** Zig 0.18.0 开发进度（来自 Codeberg milestones），为空表示未获取到，不显示进度条。 */
+    private String zigDevText = "";
+    private int zigDevPct;
+
+    /** 「浏览 Zig 项目」弹窗；连点时挡住重复弹出。 */
+    private AlertDialog zigTopDialog;
+
+    /** 弹窗内嵌 WebView 打开 gitcn 的 Zig 热门项目榜，链接都在弹窗内打开。 */
+    private void showZigTop() {
+        if (zigTopDialog != null && zigTopDialog.isShowing()) return;
+
+        android.webkit.WebView web = new android.webkit.WebView(this);
+        android.webkit.WebSettings ws = web.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setLoadWithOverviewMode(true);
+        ws.setUseWideViewPort(true);
+        ws.setBuiltInZoomControls(true);
+        ws.setDisplayZoomControls(false);
+        ws.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        ProgressBar loading = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        loading.setMax(100);
+        box.addView(loading, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        int height = (int) (getResources().getDisplayMetrics().heightPixels * 0.65f);
+        box.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height));
+
+        web.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public void onProgressChanged(android.webkit.WebView view, int progress) {
+                loading.setProgress(progress);
+                loading.setVisibility(progress >= 100 ? View.GONE : View.VISIBLE);
+            }
+        });
+        web.setWebViewClient(new android.webkit.WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(android.webkit.WebView view,
+                                                    android.webkit.WebResourceRequest request) {
+                String scheme = request.getUrl().getScheme();
+                if (scheme != null && !"http".equals(scheme) && !"https".equals(scheme)) {
+                    // 非 http(s) 链接（如 baiduboxapp://）交给系统，没对应 App 就留在当前页
+                    try {
+                        startActivity(new android.content.Intent(
+                                android.content.Intent.ACTION_VIEW, request.getUrl()));
+                    } catch (Exception ignored) {
+                    }
+                    return true;
+                }
+                return false;
+            }
+        });
+        web.loadUrl("https://github.com/search?q=zig+language%3AZig&type=repositories&l=Zig");
+
+        zigTopDialog = new AlertDialog.Builder(this)
+                .setTitle("Zig 项目")
+                .setView(box)
+                .setPositiveButton("关闭", null)
+                .create();
+        zigTopDialog.setOnDismissListener(d -> {
+            web.stopLoading();
+            web.destroy();
+            zigTopDialog = null;
+        });
+        zigTopDialog.show();
     }
 
     // ---------------------------------------------------------------- 配置
@@ -369,6 +440,8 @@ public class PackagesActivity extends Activity {
             TextView title = v.findViewById(com.microui.zigeditor.R.id.pkg_row_title);
             TextView st = v.findViewById(com.microui.zigeditor.R.id.pkg_row_status);
             ProgressBar pb = v.findViewById(com.microui.zigeditor.R.id.pkg_row_bar);
+            // 开发进度条只用于 Zig 组行，复用视图时普通包必须隐藏
+            v.findViewById(com.microui.zigeditor.R.id.pkg_row_dev).setVisibility(View.GONE);
 
             UiState s = stateOf(p);
             PackageJobs.Job job = jobs.job(p.id);
@@ -391,9 +464,10 @@ public class PackagesActivity extends Activity {
 
             // 未装且缺前置依赖 → 置灰
             v.setAlpha(blocked ? 0.45f : 1f);
-            title.setTextColor(getColor(s == UiState.FAILED ? com.microui.zigeditor.R.color.m3_error
-                    : blocked ? com.microui.zigeditor.R.color.m3_on_surface_variant
-                    : com.microui.zigeditor.R.color.m3_on_surface));
+            title.setTextColor(com.microui.zigeditor.ThemeSettings.color(PackagesActivity.this,
+                    s == UiState.FAILED ? com.microui.zigeditor.R.attr.palette_error
+                    : blocked ? com.microui.zigeditor.R.attr.palette_on_surface_variant
+                    : com.microui.zigeditor.R.attr.palette_on_surface));
             return v;
         }
     }
@@ -442,8 +516,58 @@ public class PackagesActivity extends Activity {
             pb.setVisibility(ProgressBar.GONE);
         }
         v.setAlpha(1f);
-        title.setTextColor(getColor(com.microui.zigeditor.R.color.m3_on_surface));
+        title.setTextColor(com.microui.zigeditor.ThemeSettings.color(this,
+                com.microui.zigeditor.R.attr.palette_on_surface));
+
+        View dev = v.findViewById(com.microui.zigeditor.R.id.pkg_row_dev);
+        if (zigDevText.isEmpty()) {
+            dev.setVisibility(View.GONE);
+        } else {
+            ((TextView) v.findViewById(com.microui.zigeditor.R.id.pkg_row_dev_text)).setText(zigDevText);
+            ((ProgressBar) v.findViewById(com.microui.zigeditor.R.id.pkg_row_dev_bar)).setProgress(zigDevPct);
+            dev.setVisibility(View.VISIBLE);
+        }
         return v;
+    }
+
+    /** 拉取 Codeberg 上 Zig 0.18.0 milestone 的 issue 完成情况并显示进度条；网络失败或没有该里程碑时保持隐藏。 */
+    private void loadZigDevProgress() {
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(
+                        "https://codeberg.org/api/v1/repos/ziglang/zig/milestones?state=open&limit=50")
+                        .openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                String json;
+                try (java.io.InputStream in = conn.getInputStream()) {
+                    java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    json = out.toString("UTF-8");
+                } finally {
+                    conn.disconnect();
+                }
+                org.json.JSONArray arr = new org.json.JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject m = arr.getJSONObject(i);
+                    if (!"0.18.0".equals(m.optString("title"))) continue;
+                    int open = m.optInt("open_issues");
+                    int closed = m.optInt("closed_issues");
+                    int total = open + closed;
+                    if (total <= 0) return;
+                    zigDevPct = Math.round(closed * 100f / total);
+                    zigDevText = "0.18.0 开发进度 " + zigDevPct + "%（" + closed + "/" + total + "）";
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) adapter.notifyDataSetChanged();
+                    });
+                    return;
+                }
+            } catch (Exception ignored) {
+                // 拉取失败不打扰用户，仅不显示进度条
+            }
+        }).start();
     }
 
     /** 索引里的所有 zig 版本，新版本在前。 */
@@ -633,12 +757,14 @@ public class PackagesActivity extends Activity {
         TextView k = new TextView(this);
         k.setText(label);
         k.setTextSize(12);
-        k.setTextColor(getColor(com.microui.zigeditor.R.color.m3_on_surface_variant));
+        k.setTextColor(com.microui.zigeditor.ThemeSettings.color(this,
+                com.microui.zigeditor.R.attr.palette_on_surface_variant));
         k.setWidth(dp(56));
         TextView v = new TextView(this);
         v.setText(value);
         v.setTextSize(13);
-        v.setTextColor(getColor(com.microui.zigeditor.R.color.m3_on_surface));
+        v.setTextColor(com.microui.zigeditor.ThemeSettings.color(this,
+                com.microui.zigeditor.R.attr.palette_on_surface));
         v.setLayoutParams(new LinearLayout.LayoutParams(0,
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(k);

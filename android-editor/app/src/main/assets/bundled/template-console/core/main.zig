@@ -29,7 +29,8 @@ comptime {
 fn getauxvalShim(index: usize) callconv(.c) usize {
     const auxv = std.os.linux.elf_aux_maybe orelse return 0;
     var i: usize = 0;
-    while (auxv[i].a_type != std.elf.AT.NULL) : (i += 1) {
+    // AT_NULL 就是 0，直接写字面量：std.elf.AT 在 Zig 0.16 里不存在，引用会编译失败
+    while (auxv[i].a_type != 0) : (i += 1) {
         if (auxv[i].a_type == index) return auxv[i].a_un.a_val;
     }
     return 0;

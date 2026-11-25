@@ -1,29 +1,142 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Material 3 浅色主题：状态栏跟随 surface，深色图标 -->
-    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@color/m3_surface</item>
-        <item name="android:statusBarColor">@color/m3_surface</item>
-        <item name="android:navigationBarColor">@color/m3_surface</item>
+
+    <!-- 浅色基础主题：具体色值由 AppTheme.* 注入 palette_*，布局只引用 attr -->
+    <style name="BaseTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">?attr/palette_surface</item>
+        <item name="android:statusBarColor">?attr/palette_surface</item>
+        <item name="android:navigationBarColor">?attr/palette_surface</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:colorAccent">@color/m3_primary</item>
-        <item name="android:alertDialogTheme">@style/AppDialog</item>
+        <item name="android:colorAccent">?attr/palette_primary</item>
         <!-- Android 15 强制 edge-to-edge，这里显式关闭，让上面的 statusBarColor 生效 -->
         <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
     </style>
 
-    <!-- M3 对话框：28dp 圆角、surfaceContainerHigh、主色文字按钮 -->
-    <style name="AppDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+    <!-- 对话框基础主题：对话框主题需自带 palette_*，不能依赖 Activity 主题 -->
+    <style name="BaseDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:background">@drawable/m3_dialog</item>
-        <item name="android:colorAccent">@color/m3_primary</item>
-        <item name="android:textColorPrimary">@color/m3_on_surface</item>
-        <item name="android:textColorSecondary">@color/m3_on_surface_variant</item>
+        <item name="android:colorAccent">?attr/palette_primary</item>
+        <item name="android:textColorPrimary">?attr/palette_on_surface</item>
+        <item name="android:textColorSecondary">?attr/palette_on_surface_variant</item>
         <item name="android:buttonBarButtonStyle">@style/M3DialogButton</item>
+        <item name="palette_primary">@color/m3_primary</item>
+        <item name="palette_on_surface">@color/m3_on_surface</item>
+        <item name="palette_on_surface_variant">@color/m3_on_surface_variant</item>
+        <item name="palette_surface_container_high">@color/m3_surface_container_high</item>
+    </style>
+
+    <!-- 默认配色：蓝莓 -->
+    <style name="AppTheme" parent="BaseTheme">
+        <item name="palette_primary">@color/m3_primary</item>
+        <item name="palette_on_primary">@color/m3_on_primary</item>
+        <item name="palette_primary_container">@color/m3_primary_container</item>
+        <item name="palette_on_primary_container">@color/m3_on_primary_container</item>
+        <item name="palette_secondary_container">@color/m3_secondary_container</item>
+        <item name="palette_on_secondary_container">@color/m3_on_secondary_container</item>
+        <item name="palette_surface">@color/m3_surface</item>
+        <item name="palette_surface_container_low">@color/m3_surface_container_low</item>
+        <item name="palette_surface_container">@color/m3_surface_container</item>
+        <item name="palette_surface_container_high">@color/m3_surface_container_high</item>
+        <item name="palette_on_surface">@color/m3_on_surface</item>
+        <item name="palette_on_surface_variant">@color/m3_on_surface_variant</item>
+        <item name="palette_outline_variant">@color/m3_outline_variant</item>
+        <item name="palette_error">@color/m3_error</item>
+        <item name="palette_on_error">@color/m3_on_error</item>
+        <item name="android:alertDialogTheme">@style/AppDialog.Blueberry</item>
+    </style>
+
+    <!-- 森林 -->
+    <style name="AppTheme.Forest" parent="BaseTheme">
+        <item name="palette_primary">@color/forest_primary</item>
+        <item name="palette_on_primary">@color/forest_on_primary</item>
+        <item name="palette_primary_container">@color/forest_primary_container</item>
+        <item name="palette_on_primary_container">@color/forest_on_primary_container</item>
+        <item name="palette_secondary_container">@color/forest_secondary_container</item>
+        <item name="palette_on_secondary_container">@color/forest_on_secondary_container</item>
+        <item name="palette_surface">@color/forest_surface</item>
+        <item name="palette_surface_container_low">@color/forest_surface_container_low</item>
+        <item name="palette_surface_container">@color/forest_surface_container</item>
+        <item name="palette_surface_container_high">@color/forest_surface_container_high</item>
+        <item name="palette_on_surface">@color/forest_on_surface</item>
+        <item name="palette_on_surface_variant">@color/forest_on_surface_variant</item>
+        <item name="palette_outline_variant">@color/forest_outline_variant</item>
+        <item name="palette_error">@color/forest_error</item>
+        <item name="palette_on_error">@color/forest_on_error</item>
+        <item name="android:alertDialogTheme">@style/AppDialog.Forest</item>
+    </style>
+
+    <!-- 紫罗兰 -->
+    <style name="AppTheme.Violet" parent="BaseTheme">
+        <item name="palette_primary">@color/violet_primary</item>
+        <item name="palette_on_primary">@color/violet_on_primary</item>
+        <item name="palette_primary_container">@color/violet_primary_container</item>
+        <item name="palette_on_primary_container">@color/violet_on_primary_container</item>
+        <item name="palette_secondary_container">@color/violet_secondary_container</item>
+        <item name="palette_on_secondary_container">@color/violet_on_secondary_container</item>
+        <item name="palette_surface">@color/violet_surface</item>
+        <item name="palette_surface_container_low">@color/violet_surface_container_low</item>
+        <item name="palette_surface_container">@color/violet_surface_container</item>
+        <item name="palette_surface_container_high">@color/violet_surface_container_high</item>
+        <item name="palette_on_surface">@color/violet_on_surface</item>
+        <item name="palette_on_surface_variant">@color/violet_on_surface_variant</item>
+        <item name="palette_outline_variant">@color/violet_outline_variant</item>
+        <item name="palette_error">@color/violet_error</item>
+        <item name="palette_on_error">@color/violet_on_error</item>
+        <item name="android:alertDialogTheme">@style/AppDialog.Violet</item>
+    </style>
+
+    <!-- 暖橙 -->
+    <style name="AppTheme.Sunset" parent="BaseTheme">
+        <item name="palette_primary">@color/sunset_primary</item>
+        <item name="palette_on_primary">@color/sunset_on_primary</item>
+        <item name="palette_primary_container">@color/sunset_primary_container</item>
+        <item name="palette_on_primary_container">@color/sunset_on_primary_container</item>
+        <item name="palette_secondary_container">@color/sunset_secondary_container</item>
+        <item name="palette_on_secondary_container">@color/sunset_on_secondary_container</item>
+        <item name="palette_surface">@color/sunset_surface</item>
+        <item name="palette_surface_container_low">@color/sunset_surface_container_low</item>
+        <item name="palette_surface_container">@color/sunset_surface_container</item>
+        <item name="palette_surface_container_high">@color/sunset_surface_container_high</item>
+        <item name="palette_on_surface">@color/sunset_on_surface</item>
+        <item name="palette_on_surface_variant">@color/sunset_on_surface_variant</item>
+        <item name="palette_outline_variant">@color/sunset_outline_variant</item>
+        <item name="palette_error">@color/sunset_error</item>
+        <item name="palette_on_error">@color/sunset_on_error</item>
+        <item name="android:alertDialogTheme">@style/AppDialog.Sunset</item>
+    </style>
+
+    <!-- 各配色方案的弹窗：只需覆盖弹窗实际用到的 4 个 palette 色 -->
+    <style name="AppDialog.Blueberry" parent="BaseDialog">
+        <item name="palette_primary">@color/m3_primary</item>
+        <item name="palette_on_surface">@color/m3_on_surface</item>
+        <item name="palette_on_surface_variant">@color/m3_on_surface_variant</item>
+        <item name="palette_surface_container_high">@color/m3_surface_container_high</item>
+    </style>
+
+    <style name="AppDialog.Forest" parent="BaseDialog">
+        <item name="palette_primary">@color/forest_primary</item>
+        <item name="palette_on_surface">@color/forest_on_surface</item>
+        <item name="palette_on_surface_variant">@color/forest_on_surface_variant</item>
+        <item name="palette_surface_container_high">@color/forest_surface_container_high</item>
+    </style>
+
+    <style name="AppDialog.Violet" parent="BaseDialog">
+        <item name="palette_primary">@color/violet_primary</item>
+        <item name="palette_on_surface">@color/violet_on_surface</item>
+        <item name="palette_on_surface_variant">@color/violet_on_surface_variant</item>
+        <item name="palette_surface_container_high">@color/violet_surface_container_high</item>
+    </style>
+
+    <style name="AppDialog.Sunset" parent="BaseDialog">
+        <item name="palette_primary">@color/sunset_primary</item>
+        <item name="palette_on_surface">@color/sunset_on_surface</item>
+        <item name="palette_on_surface_variant">@color/sunset_on_surface_variant</item>
+        <item name="palette_surface_container_high">@color/sunset_surface_container_high</item>
     </style>
 
     <style name="M3DialogButton" parent="@android:style/Widget.Material.Button.Borderless">
-        <item name="android:textColor">@color/m3_primary</item>
+        <item name="android:textColor">?attr/palette_primary</item>
         <item name="android:textAllCaps">false</item>
     </style>
 </resources>

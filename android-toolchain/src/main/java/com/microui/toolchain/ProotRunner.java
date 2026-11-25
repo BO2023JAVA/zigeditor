@@ -109,6 +109,102 @@ public final class ProotRunner {
         return zigCurrentId(c).startsWith("zig-0.16");
     }
 
+    /** 已安装的 zig 版本号列表（不含 ABI 后缀，新的在前），供新建项目选择。 */
+    public static List<String> installedZigVersions(Context c) {
+        List<String> out = new ArrayList<>();
+        File[] all = new File(microuiRoot(c), "pkgs").listFiles();
+        if (all != null) {
+            for (File d : all) {
+                String id = d.getName();
+                if (id.equals(ZIG_ID) || !isZigPackageId(id) || !zigIdForAbi(c, id)
+                        || !new File(d, "zig").isFile()) continue;
+                out.add(versionOfId(id));
+            }
+        }
+        out.sort((a, b) -> compareVersion(b, a));
+        return out;
+    }
+
+    /** 包 id → 版本号：zig-0.16.0-x64 → 0.16.0。 */
+    private static String versionOfId(String id) {
+        String v = id.substring("zig-".length());
+        return v.endsWith("-x64") ? v.substring(0, v.length() - "-x64".length()) : v;
+    }
+
+    /** 当前生效的 zig 版本号；未设置或旧版无版本号时返回 ""。 */
+    public static String zigCurrentVersion(Context c) {
+        String id = zigCurrentId(c);
+        return id.isEmpty() || id.equals(ZIG_ID) ? "" : versionOfId(id);
+    }
+
+    /**
+     * 当前 ABI 下可选的全部 zig 版本（含未下载）：内置索引里的 zig 包 + 已安装版本，新的在前。
+     * 用于新建项目时把未下载版本也列出来（置灰、点击去下载）。
+     */
+    public static List<String> availableZigVersions(Context c, String manifestJson) {
+        List<String> out = new ArrayList<>();
+        try {
+            for (Pkg p : Pkg.parseIndex(manifestJson)) {
+                if (!isZigPackageId(p.id) || !zigIdForAbi(c, p.id)) continue;
+                String v = p.version != null && !p.version.isEmpty() ? p.version : versionOfId(p.id);
+                if (!out.contains(v)) out.add(v);
+            }
+        } catch (Exception ignored) { }
+        for (String v : installedZigVersions(c)) if (!out.contains(v)) out.add(v);
+        out.sort((a, b) -> compareVersion(b, a));
+        return out;
+    }
+
+    /** 版本号（如 0.16.0）对应当前 ABI 的已安装包 id；未安装返回 null。 */
+    public static String zigPackageIdForVersion(Context c, String version) {
+        if (version == null || version.trim().isEmpty()) return null;
+        String id = "zig-" + version.trim() + (isX86(c) ? "-x64" : "");
+        return new File(new File(microuiRoot(c), "pkgs"), id + "/zig").isFile() ? id : null;
+    }
+
+    /** 切换当前 zig 到指定版本；版本未安装时返回 false 且不改当前设置。 */
+    public static boolean useZigVersion(Context c, String version) {
+        String id = zigPackageIdForVersion(c, version);
+        if (id == null) return false;
+        if (id.equals(zigCurrentId(c))) return true;
+        File f = new File(new File(microuiRoot(c), "state"), "zig-current");
+        try {
+            f.getParentFile().mkdirs();
+            Files.write(f.toPath(), id.getBytes(StandardCharsets.UTF_8));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** 进入/编译项目时按 config.json 的 zigVersion 自动切换工具链；未声明或该版本未安装则保持现状。 */
+    public static void useZigForProject(Context c, File projectDir) {
+        if (projectDir == null) return;
+        File f = new File(projectDir, "config.json");
+        if (!f.isFile()) f = new File(projectDir, "microui.json");
+        try {
+            if (!f.isFile()) return;
+            String v = new org.json.JSONObject(
+                    new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8))
+                    .optString("zigVersion", "");
+            if (!v.isEmpty()) useZigVersion(c, v);
+        } catch (Exception ignored) { }
+    }
+
+    private static int compareVersion(String a, String b) {
+        String[] x = a.split("\\."), y = b.split("\\.");
+        for (int i = 0; i < Math.max(x.length, y.length); i++) {
+            int xi = i < x.length ? parseInt(x[i]) : 0;
+            int yi = i < y.length ? parseInt(y[i]) : 0;
+            if (xi != yi) return xi - yi;
+        }
+        return 0;
+    }
+
+    private static int parseInt(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return 0; }
+    }
+
     /** 切换当前 zig 版本（写入标记文件，终端下次启动生效）。 */
     public static void setZigCurrentId(Context c, String id) throws IOException {
         setZigCurrentId(microuiRoot(c), id);

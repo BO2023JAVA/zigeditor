@@ -1,0 +1,127 @@
+{
+  "name": "Dracula",
+  "tokenColors": [
+    {
+      "settings": {
+        "foreground": "#F8F8F2"
+      }
+    },
+    {
+      "name": "Comments",
+      "scope": [
+        "comment",
+        "punctuation.definition.comment"
+      ],
+      "settings": {
+        "fontStyle": "italic",
+        "foreground": "#6272A4"
+      }
+    },
+    {
+      "name": "Keywords",
+      "scope": [
+        "keyword",
+        "storage"
+      ],
+      "settings": {
+        "foreground": "#FF79C6"
+      }
+    },
+    {
+      "name": "Strings",
+      "scope": "string",
+      "settings": {
+        "foreground": "#F1FA8C"
+      }
+    },
+    {
+      "name": "String escape sequences",
+      "scope": "constant.character.escape",
+      "settings": {
+        "foreground": "#FF79C6"
+      }
+    },
+    {
+      "name": "Numbers and characters",
+      "scope": [
+        "constant.numeric",
+        "constant.character"
+      ],
+      "settings": {
+        "foreground": "#BD93F9"
+      }
+    },
+    {
+      "name": "Types",
+      "scope": [
+        "storage.type",
+        "support.type",
+        "entity.name.type",
+        "entity.name.namespace",
+        "support.class",
+        "keyword.type"
+      ],
+      "settings": {
+        "foreground": "#8BE9FD"
+      }
+    },
+    {
+      "name": "Functions",
+      "scope": [
+        "entity.name.function",
+        "support.function"
+      ],
+      "settings": {
+        "foreground": "#50FA7B"
+      }
+    },
+    {
+      "name": "Operators",
+      "scope": "keyword.operator",
+      "settings": {
+        "foreground": "#FF79C6"
+      }
+    },
+    {
+      "name": "Language constants",
+      "scope": [
+        "constant.language",
+        "support.constant",
+        "variable.language",
+        "keyword.constant"
+      ],
+      "settings": {
+        "foreground": "#BD93F9"
+      }
+    },
+    {
+      "name": "Punctuation",
+      "scope": "punctuation",
+      "settings": {
+        "foreground": "#F8F8F2"
+      }
+    },
+    {
+      "name": "Invalid",
+      "scope": "invalid",
+      "settings": {
+        "foreground": "#FF5555"
+      }
+    }
+  ],
+  "colors": {
+    "focusBorder": "#BD93F9",
+    "selection.background": "#44475A",
+    "editor.background": "#282A36",
+    "editor.foreground": "#F8F8F2",
+    "editorCursor.foreground": "#F8F8F2",
+    "editor.lineHighlightBackground": "#44475A",
+    "editor.selectionBackground": "#44475A",
+    "editorLineNumber.foreground": "#6272A4",
+    "editorLineNumber.activeForeground": "#F8F8F2",
+    "editorWhitespace.foreground": "#44475A",
+    "editorIndentGuide.background": "#44475A",
+    "editorIndentGuide.activeBackground": "#BD93F980"
+  },
+  "semanticHighlighting": true
+}

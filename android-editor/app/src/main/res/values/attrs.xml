@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 应用配色方案：由 AppTheme.* 注入具体颜色，布局统一引用这些 attr 即可换肤 -->
+    <attr name="palette_primary" format="color" />
+    <attr name="palette_on_primary" format="color" />
+    <attr name="palette_primary_container" format="color" />
+    <attr name="palette_on_primary_container" format="color" />
+    <attr name="palette_secondary_container" format="color" />
+    <attr name="palette_on_secondary_container" format="color" />
+    <attr name="palette_surface" format="color" />
+    <attr name="palette_surface_container_low" format="color" />
+    <attr name="palette_surface_container" format="color" />
+    <attr name="palette_surface_container_high" format="color" />
+    <attr name="palette_on_surface" format="color" />
+    <attr name="palette_on_surface_variant" format="color" />
+    <attr name="palette_outline_variant" format="color" />
+    <attr name="palette_error" format="color" />
+    <attr name="palette_on_error" format="color" />
+</resources>
