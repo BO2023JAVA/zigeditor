@@ -101,23 +101,6 @@
       "notes": "官方 aarch64-linux 包。包管理里折叠在「Zig 工具链」，装完自动设为当前版本。"
     },
     {
-      "id": "zig-toolchain",
-      "name": "Zig 0.17.0 (aarch64-linux)",
-      "version": "0.17.0",
-      "format": "tar.xz",
-      "install": "unpack",
-      "url": "zig-toolchain-0.17.0-aarch64-linux.tar.xz",
-      "urls": [
-        "https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz",
-        "https://zig.mirror.mschae23.de/zig/0.17.0/zig-aarch64-linux-0.17.0.tar.xz"
-      ],
-      "size": 52877280,
-      "sha256": "9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8",
-      "depends": ["ubuntu-runtime"],
-      "abi": "arm64-v8a",
-      "notes": "沿用旧包 id「zig-toolchain」以保留已安装设备（目录 pkgs/zig-toolchain）。"
-    },
-    {
       "id": "zig-0.17.1",
       "name": "Zig 0.17.1 (aarch64-linux)",
       "version": "0.17.1",
@@ -164,23 +147,6 @@
       ],
       "size": 55478392,
       "sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
-      "depends": ["ubuntu-runtime-x64"],
-      "abi": "x86_64",
-      "notes": "官方 x86_64-linux 包，供雷电等 x86_64 模拟器；装完自动设为当前版本。"
-    },
-    {
-      "id": "zig-0.17.0-x64",
-      "name": "Zig 0.17.0 (x86_64-linux)",
-      "version": "0.17.0",
-      "format": "tar.xz",
-      "install": "unpack",
-      "url": "zig-x86_64-linux-0.17.0.tar.xz",
-      "urls": [
-        "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz",
-        "https://zig.mirror.mschae23.de/zig/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
-      ],
-      "size": 57332648,
-      "sha256": "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026",
       "depends": ["ubuntu-runtime-x64"],
       "abi": "x86_64",
       "notes": "官方 x86_64-linux 包，供雷电等 x86_64 模拟器；装完自动设为当前版本。"

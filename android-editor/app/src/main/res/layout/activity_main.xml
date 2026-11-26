@@ -14,28 +14,14 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <LinearLayout
+        <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Zig 项目"
-                android:textColor="?attr/palette_on_surface"
-                android:textSize="24sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/dir_hint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:textColor="?attr/palette_on_surface_variant"
-                android:textSize="12sp" />
-        </LinearLayout>
+            android:text="ZigEditor"
+            android:textColor="?attr/palette_on_surface"
+            android:textSize="24sp"
+            android:textStyle="bold" />
 
         <ImageButton
             android:id="@+id/import_project"
@@ -64,17 +50,39 @@
             android:tint="?attr/palette_on_primary_container" />
     </LinearLayout>
 
-    <ListView
-        android:id="@+id/file_list"
+    <TextView
+        android:id="@+id/proj_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="?attr/palette_on_surface_variant"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:divider="@android:color/transparent"
-        android:dividerHeight="10dp"
-        android:listSelector="@android:color/transparent"
-        android:paddingBottom="8dp" />
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@+id/file_list"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:divider="@android:color/transparent"
+            android:dividerHeight="10dp"
+            android:listSelector="@android:color/transparent"
+            android:paddingBottom="8dp" />
+
+        <ProgressBar
+            android:id="@+id/proj_loading"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="center"
+            android:indeterminate="true"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <Button
         android:id="@+id/new_project"

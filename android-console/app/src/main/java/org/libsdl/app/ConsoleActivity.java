@@ -26,7 +26,7 @@ import java.nio.charset.StandardCharsets;
  * 纯终端 APK 的 Java 壳：没有任何 UI 框架 / SDL 依赖。
  *
  * 流程：建界面 → 把 fd 1/2 重定向到管道 → 后台线程调用 Zig 导出的 JNI 入口
- * （core/main.zig 里的 Java_org_libsdl_app_ConsoleActivity_run）→ 另一端读到
+ * （core/entry.zig 里的 Java_org_libsdl_app_ConsoleActivity_run）→ 另一端读到
  * 什么就追加到屏幕上的终端窗口。
  *
  * 类名与 Zig 里的 JNI 符号一一对应，改名时两边必须同步。
@@ -122,7 +122,8 @@ public class ConsoleActivity extends Activity {
             }
             restoreStdio();
             final int exit = code;
-            runOnUiThread(() -> append("\n[程序结束 exit=" + exit + "]\n"));
+            // 正常结束（exit=0）不额外提示，避免和程序自己的输出混在一起
+            if (exit != 0) runOnUiThread(() -> append("\n[程序结束 exit=" + exit + "]\n"));
             running = false;
         }, "console-run").start();
     }

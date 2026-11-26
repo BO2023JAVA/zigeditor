@@ -2,7 +2,7 @@
 //!
 //! 纯终端项目：没有 UI 框架、没有 SDL，只有 Zig 标准库。
 //! main() 里 print 的内容会显示在打包出来的 APK 终端窗口里。
-//! core/main.zig 是安卓入口（JNI），一般不用改。
+//! core/entry.zig 是安卓入口（JNI），一般不用改。
 
 const std = @import("std");
 

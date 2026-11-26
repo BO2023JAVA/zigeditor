@@ -7,11 +7,16 @@ import android.content.Context;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.util.TypedValue;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 内置 API 文档：按「常用 + 从易到难」排序，列出 microui 常用函数。
@@ -413,39 +418,155 @@ public class DocsActivity extends ThemedActivity {
         super.onCreate(savedInstanceState);
         initPalette();
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(BG);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
         int pad = dp(16);
-        root.setPadding(pad, pad, pad, pad);
+        root.setPadding(pad, pad, pad, 0);
 
         TextView head = new TextView(this);
-        head.setText("microui API 文档");
+        head.setText("microui 文档");
         head.setTextColor(TEXT);
         head.setTypeface(Typeface.DEFAULT_BOLD);
         head.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
         head.setPadding(0, 0, 0, dp(4));
         root.addView(head);
 
-        TextView sub = new TextView(this);
-        sub.setText("按「常用 + 从易到难」排列。每张卡片有简明说明和示例，点「详情」看完整参数与注意事项。");
-        sub.setTextColor(DESC);
-        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        sub.setPadding(0, 0, 0, dp(8));
-        root.addView(sub);
+        // 顶部 tab 栏：横向可滚动，同一时间只显示一页
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setPadding(0, dp(8), 0, dp(4));
+        hs.addView(bar, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(hs);
 
+        pagesView = new android.widget.FrameLayout(this);
+        root.addView(pagesView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // API 放第一个 tab，项目/配置/编译/字体/框架各占一页（来自 assets/docs/*.md）
+        addPage(bar, "API", buildApiPage());
+        addDocPages(bar);
+        selectTab(0);
+
+        setContentView(root);
+    }
+
+    private android.widget.FrameLayout pagesView;
+    private final java.util.List<TextView> tabViews = new java.util.ArrayList<>();
+    private int currentTab = -1;
+
+    /** 新建一个 tab：chip 按钮 + 一页内容（内容自带 ScrollView）。 */
+    private void addPage(LinearLayout bar, String label, View page) {
+        final int index = pagesView.getChildCount();
+        TextView chip = new TextView(this);
+        chip.setText(label);
+        chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+        chip.setOnClickListener(v -> selectTab(index));
+        bar.addView(chip);
+        tabViews.add(chip);
+        page.setVisibility(View.GONE);
+        pagesView.addView(page, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private void selectTab(int index) {
+        if (index == currentTab || index < 0 || index >= tabViews.size()) return;
+        currentTab = index;
+        for (int i = 0; i < tabViews.size(); i++) {
+            TextView t = tabViews.get(i);
+            boolean on = i == index;
+            t.setTextColor(on ? ACCENT : DESC);
+            t.setTypeface(Typeface.DEFAULT, on ? Typeface.BOLD : Typeface.NORMAL);
+            t.setBackgroundColor(on ? CARD : android.graphics.Color.TRANSPARENT);
+        }
+        for (int i = 0; i < pagesView.getChildCount(); i++) {
+            View page = pagesView.getChildAt(i);
+            boolean on = i == index;
+            page.setVisibility(on ? View.VISIBLE : View.GONE);
+            // 首次显示时回到顶部；之后切换保留各自的滚动位置
+            if (on && page instanceof ScrollView && page.getTag() == null) {
+                page.setTag(Boolean.TRUE);
+                ScrollView sv = (ScrollView) page;
+                sv.post(() -> sv.scrollTo(0, 0));
+            }
+        }
+    }
+
+    /** API 页：原有 23 条卡片。 */
+    private View buildApiPage() {
+        LinearLayout body = pageBody();
         String lastGroup = null;
         for (Doc d : DOCS) {
             if (!d.group.equals(lastGroup)) {
-                root.addView(groupHeader(d.group));
+                body.addView(groupHeader(d.group));
                 lastGroup = d.group;
             }
-            root.addView(card(d));
+            body.addView(card(d));
         }
+        return wrapScroll(body);
+    }
 
-        scroll.addView(root);
-        setContentView(scroll);
+    private void addDocPages(LinearLayout bar) {
+        String[] names;
+        try {
+            names = getAssets().list("docs");
+        } catch (IOException e) {
+            return;
+        }
+        if (names == null || names.length == 0) return;
+        java.util.Arrays.sort(names);
+        for (String name : names) {
+            if (!name.endsWith(".md")) continue;
+            String md = readAsset("docs/" + name);
+            if (md == null) continue;
+            addPage(bar, tabLabel(md, name), buildDocPage(md));
+        }
+    }
+
+    private View buildDocPage(String md) {
+        LinearLayout body = pageBody();
+        renderMarkdown(body, md);
+        return wrapScroll(body);
+    }
+
+    private LinearLayout pageBody() {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        int p = dp(16);
+        body.setPadding(p, dp(4), p, p);
+        return body;
+    }
+
+    private ScrollView wrapScroll(LinearLayout body) {
+        ScrollView sv = new ScrollView(this);
+        sv.addView(body);
+        return sv;
+    }
+
+    private String readAsset(String path) {
+        try (InputStream in = getAssets().open(path)) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            return new String(bo.toByteArray(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** tab 名：优先读文档里的 <!-- tab: xxx -->，没有就用去掉序号的文件名。 */
+    private static String tabLabel(String md, String file) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<!--\\s*tab:\\s*([^>]+?)\\s*-->").matcher(md);
+        if (m.find()) return m.group(1);
+        return file.replaceFirst("^\\d+-", "").replace(".md", "");
     }
 
     private TextView groupHeader(String text) {
@@ -566,6 +687,95 @@ public class DocsActivity extends ThemedActivity {
         lp.bottomMargin = bottomMargin;
         t.setLayoutParams(lp);
         return t;
+    }
+
+    // ------------------------------------------------------------ 项目文档（assets/docs/*.md）
+
+    /** 极简 Markdown 渲染：# 标题、## 小节、``` 代码块、- 列表，其余按段落合并。 */
+    private void renderMarkdown(LinearLayout root, String md) {
+        StringBuilder para = new StringBuilder();
+        StringBuilder code = null;
+        for (String raw : md.split("\n", -1)) {
+            String l = raw.trim();
+            if (code != null) {
+                if (l.startsWith("```")) {
+                    addCodeBlock(root, code.toString());
+                    code = null;
+                } else {
+                    code.append(raw).append('\n');
+                }
+                continue;
+            }
+            if (l.startsWith("```")) {
+                flushParagraph(root, para);
+                code = new StringBuilder();
+                continue;
+            }
+            if (l.startsWith("<!--")) continue; // 元信息（如 tab 名），不渲染
+            if (l.isEmpty()) { flushParagraph(root, para); continue; }
+            if (l.startsWith("# ")) {
+                flushParagraph(root, para);
+                addDocTitle(root, l.substring(2));
+                continue;
+            }
+            if (l.startsWith("## ")) {
+                flushParagraph(root, para);
+                root.addView(groupHeader(l.substring(3)));
+                continue;
+            }
+            if (l.startsWith("- ")) {
+                flushParagraph(root, para);
+                addDocText(root, "• " + inline(l.substring(2)), dp(4));
+                continue;
+            }
+            para.append(inline(l)).append('\n');
+        }
+        if (code != null) addCodeBlock(root, code.toString());
+        flushParagraph(root, para);
+    }
+
+    /** 去掉行内 Markdown 标记（**粗体**、`代码`），保持纯文本。 */
+    private static String inline(String s) {
+        return s.replace("**", "").replace("`", "");
+    }
+
+    private void flushParagraph(LinearLayout root, StringBuilder para) {
+        String t = para.toString().trim();
+        para.setLength(0);
+        if (!t.isEmpty()) addDocText(root, t, dp(8));
+    }
+
+    private void addDocTitle(LinearLayout root, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(TEXT);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        tv.setPadding(0, dp(14), 0, dp(6));
+        root.addView(tv);
+    }
+
+    private void addDocText(LinearLayout root, String text, int bottomMargin) {
+        TextView tv = line(text, TEXT, 13, bottomMargin);
+        tv.setLineSpacing(dp(4), 1f);
+        root.addView(tv);
+    }
+
+    private void addCodeBlock(LinearLayout root, String code) {
+        TextView tv = new TextView(this);
+        tv.setText(highlight(code.trim()));
+        tv.setTextColor(CODE_TEXT);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tv.setBackgroundColor(CODE_BG);
+        int p = dp(10);
+        tv.setPadding(p, p, p, p);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(8);
+        tv.setLayoutParams(lp);
+        root.addView(tv);
     }
 
     // ------------------------------------------------------------ 代码高亮

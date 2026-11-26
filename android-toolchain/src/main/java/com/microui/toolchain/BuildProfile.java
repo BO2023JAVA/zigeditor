@@ -88,27 +88,31 @@ public final class BuildProfile {
     public static BuildProfile of(File projectDir) {
         JSONObject cfg = readConfig(projectDir);
         String kind = cfg == null ? "" : cfg.optString("kind", "");
-        BuildProfile base = KIND_CONSOLE.equals(kind) ? console(cfg) : gui(projectDir, cfg);
+        BuildProfile base = KIND_CONSOLE.equals(kind) ? console(projectDir, cfg) : gui(projectDir, cfg);
         return appendExtras(cfg, base);
     }
 
-    /** 纯终端项目：只编译入口 + 业务代码，不链接 SDL，也不带 UI 框架。 */
-    public static BuildProfile console(JSONObject cfg) {
+    /** 纯终端项目：只编译入口 + 业务代码，不链接 SDL，也不带 UI 框架。
+     *  入口文件新项目叫 entry.zig，旧项目仍叫 main.zig，两种都识别。 */
+    public static BuildProfile console(File projectDir, JSONObject cfg) {
+        String entry = new File(projectDir, "core/entry.zig").isFile() ? "entry.zig" : "main.zig";
         List<Module> mods = new ArrayList<>();
-        mods.add(new Module("root", "core/main.zig", "app"));
+        mods.add(new Module("root", "core/" + entry, "app"));
         mods.add(new Module("app", "app.zig", extraNames(cfg)));
         return new BuildProfile(KIND_CONSOLE, "纯终端",
                 "bundled/template-console.apk", "template-console.apk",
-                "bundled/template-console", "core/main.zig", false,
+                "bundled/template-console", "core/" + entry, false,
                 mods, new String[0]);
     }
 
-    /** 图形界面项目：microui + SDL 后端，框架代码在 core/（必要）与 ui/（可选 UI 库）。 */
+    /** 图形界面项目：microui + SDL 后端，框架源码位于项目的 core/、ui/ 下。
+     *  入口文件曾叫 demo.zig，旧项目仍按老名字识别。 */
     public static BuildProfile gui(File projectDir, JSONObject cfg) {
         String root, ui, core;
-        if (new File(projectDir, "core/demo.zig").isFile()) {
+        String entry = entryName(projectDir, "core/");
+        if (entry != null) {
             // 新模板：core/ 放运行必需件，ui/ 放可选 UI 库
-            root = "core/demo.zig";
+            root = "core/" + entry;
             ui = "ui/";
             core = "core/";
         } else if (new File(projectDir, "framework/demo.zig").isFile()) {
@@ -135,6 +139,13 @@ public final class BuildProfile {
                 "bundled/template.apk", "template.apk",
                 "bundled/template-gui", root, true,
                 mods, new String[]{"/sdl/libSDL3.so", "/sdl/libSDL3_ttf.so"});
+    }
+
+    /** 入口文件名：优先 entry.zig（新），兼容旧项目的 demo.zig；都不存在返回 null。 */
+    private static String entryName(File projectDir, String prefix) {
+        if (new File(projectDir, prefix + "entry.zig").isFile()) return "entry.zig";
+        if (new File(projectDir, prefix + "demo.zig").isFile()) return "demo.zig";
+        return null;
     }
 
     /** config.json 里声明的插件模块名（自动成为 app 的依赖）。 */

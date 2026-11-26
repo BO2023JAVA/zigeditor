@@ -1,11 +1,12 @@
-//! microui 示例程序 —— 安卓端唯一入口
+//! 安卓端入口（固定文件，一般不用改）—— Android 侧唯一入口
 //!
-//! 用户写一个应用只需：
+//! 只负责把业务层 app.zig 交给 App 框架启动：
 //! 1. App.init 指定标题/窗口尺寸/每帧回调（可选主题）
 //! 2. app.run() 跑起来
 //! 窗口创建、事件循环、输入映射、帧渲染、中文字形全部由框架完成。
 //!
-//! 本仓库只保留安卓端：SDLActivity 加载 libmicrozig.so 后调用导出的 SDL_main。
+//! SDLActivity 加载 libmicrozig.so 后调用这里导出的 SDL_main。
+//! 业务代码写 app.zig（界面内容 + onFrame + applyTheme）。
 
 const microui = @import("microui");
 const appfw = @import("microui_app");

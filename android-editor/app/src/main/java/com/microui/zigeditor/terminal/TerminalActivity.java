@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ClipData;
 import android.content.ClipboardManager;
-import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -57,6 +56,10 @@ public class TerminalActivity extends ThemedActivity {
     public static final String EXTRA_RUN_CMD = "extra_run_cmd";
     /** 原生项目初始化：自动命令成功后自动跳回编辑页。 */
     public static final String EXTRA_OPEN_EDITOR_AFTER_RUN = "extra_open_editor_after_run";
+    /** 原生项目「编译 so」：自定义编译命令（容器内 cwd=项目目录，为空用默认）。 */
+    public static final String EXTRA_SO_CMD = "extra_so_cmd";
+    /** 原生项目「编译 so」：导出目录（系统下载目录下的相对路径，默认 Download）。 */
+    public static final String EXTRA_SO_EXPORT = "extra_so_export";
     /** 自动命令成功时由 shell 打印的标记，终端扫到后跳编辑页。 */
     private static final String NATIVE_INIT_OK_MARKER = "__ZIGEDITOR_NATIVE_INIT_OK__";
 
@@ -74,6 +77,8 @@ public class TerminalActivity extends ThemedActivity {
     private volatile boolean destroyed;
     private boolean hostShell;
     private boolean ctrlArmed;
+    /** 终端字号（sp），两指缩放在 10–32 之间调整。 */
+    private float fontSizeSp = 16f;
     private Button ctrlKey;
     private BroadcastReceiver installReceiver;
     /** 最近一次打包出的 APK，签名冲突时用它重装。 */
@@ -86,17 +91,25 @@ public class TerminalActivity extends ThemedActivity {
     private boolean openEditorAfterRun;
     private File editorProjectDir;
     private boolean editorOpened;
+    /** 「编译 so」的自定义命令与导出目录（为空时用默认值）。 */
+    private String soCommand;
+    private String soExportDir;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(com.microui.zigeditor.R.layout.activity_terminal);
+        // 状态栏也跟着终端压成黑色 + 亮色图标，避免顶部出现浅色条
+        getWindow().setStatusBarColor(Color.BLACK);
+        android.view.View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                & ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         AndroidToolchain.ensureDirs(this);
 
         screen = findViewById(com.microui.zigeditor.R.id.terminal_screen);
         env = findViewById(com.microui.zigeditor.R.id.terminal_env);
-        // TerminalRenderer 接收像素值；按 16sp 转换，避免高密度屏上的文字过小。
-        screen.setTextSize(Math.round(16 * getResources().getDisplayMetrics().scaledDensity));
+        // 默认 16sp，可两指缩放调整（10–32sp）
+        applyFontSize();
         screen.setTerminalViewClient(viewClient);
         applyTerminalColors();
         screen.postDelayed(this::showKeyboard, 200);
@@ -107,12 +120,14 @@ public class TerminalActivity extends ThemedActivity {
         String proj = getIntent().getStringExtra(EXTRA_PROJECT_DIR);
         boolean autoBuild = getIntent().getBooleanExtra(EXTRA_AUTO_COMPILE, true);
         String runCmd = getIntent().getStringExtra(EXTRA_RUN_CMD);
+        soCommand = getIntent().getStringExtra(EXTRA_SO_CMD);
+        soExportDir = getIntent().getStringExtra(EXTRA_SO_EXPORT);
         if (proj != null) {
             File dir = new File(proj);
             if (dir.isDirectory()) {
                 if (runCmd != null) {
                     if (ProotRunner.abiSupportHint(this).isEmpty()) {
-                        initialProjectPath = "/projects/" + dir.getName();
+                        initialProjectPath = "/root/projects/" + dir.getName();
                         initialRunCommand = runCmd;
                         openEditorAfterRun = getIntent().getBooleanExtra(EXTRA_OPEN_EDITOR_AFTER_RUN, false);
                         editorProjectDir = dir;
@@ -123,17 +138,26 @@ public class TerminalActivity extends ThemedActivity {
                     autoCompileDir = dir;
                     screen.postDelayed(() -> autoCompileProject(dir), 400);
                 } else if (ProotRunner.abiSupportHint(this).isEmpty()) {
-                    initialProjectPath = "/projects/" + dir.getName();
+                    initialProjectPath = "/root/projects/" + dir.getName();
                 }
             }
         }
 
         findViewById(com.microui.zigeditor.R.id.btn_pkgs).setOnClickListener(v ->
                 startActivity(new Intent(this, PackagesActivity.class)));
+        findViewById(com.microui.zigeditor.R.id.terminal_env_help).setOnClickListener(v -> showEnvDetails());
         setupKeyBar();
 
         ensureBundled();
-        startSession();
+        // 等布局完成再建会话：pty 的行列数要按实际视图尺寸传给容器（否则 zig 不显示编译进度）
+        screen.addOnLayoutChangeListener(new android.view.View.OnLayoutChangeListener() {
+            @Override public void onLayoutChange(android.view.View v, int left, int top, int right, int bottom,
+                                                 int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                if (screen.getWidth() <= 0 || screen.getHeight() <= 0) return;
+                screen.removeOnLayoutChangeListener(this);
+                startSession();
+            }
+        });
 
         // 安装结果回调：把 status 码翻成「签名不一致 / versionCode 降级 / ABI 不匹配…」
         installReceiver = new BroadcastReceiver() {
@@ -155,6 +179,13 @@ public class TerminalActivity extends ThemedActivity {
             registerReceiver(installReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         else
             registerReceiver(installReceiver, filter);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从包管理装完 / 切换版本回来时，顶部版本号要跟着变
+        refreshEnv();
     }
 
     @Override
@@ -187,20 +218,50 @@ public class TerminalActivity extends ThemedActivity {
                 releaseAsset("bundled/template.apk", new File(root, "template.apk"));
                 releaseAsset("bundled/template-console.apk", new File(root, "template-console.apk"));
                 releaseDir("bundled/template-gui",
-                        new File(projects, "microui-template"), "core/demo.zig");
+                        new File(projects, "microui-template"), "core/font.ttf");
+                // 清理旧版入口/字体文件名（demo.zig → entry.zig，font_simhei.ttf → font.ttf）
+                File sample = new File(projects, "microui-template");
+                for (String legacy : new String[]{"core/demo.zig", "core/font_simhei.ttf"}) {
+                    File f = new File(sample, legacy);
+                    if (f.isFile()) f.delete();
+                }
                 releaseDir("bundled/template-console",
-                        new File(projects, "console-template"), "core/main.zig");
+                        new File(projects, "console-template"), "core/entry.zig");
+                File consoleSample = new File(projects, "console-template");
+                File legacyMain = new File(consoleSample, "core/main.zig");
+                if (legacyMain.isFile()) legacyMain.delete();
             } catch (IOException e) {
                 log("[内置资源释放失败] " + e.getMessage());
             }
         }, "bundled").start();
     }
 
-    /** 释放单个内置文件（目标已存在则跳过）。 */
+    /** 删除目录树（框架升级时整体替换）。 */
+    private static void deleteRecursively(File f) {
+        File[] kids = f.listFiles();
+        if (kids != null) for (File k : kids) deleteRecursively(k);
+        f.delete();
+    }
+
+    /** 释放单个内置文件：不存在时释放；随版本更新、体积变化时覆盖（模板 APK 升级）。 */
     private void releaseAsset(String asset, File dst) throws IOException {
-        if (dst.isFile()) return;
-        log("[内置] 释放 → " + dst);
+        if (dst.isFile()) {
+            long packed = assetSize(asset);
+            if (packed <= 0 || packed == dst.length()) return;
+            log("[内置] 更新 → " + dst);
+        } else {
+            log("[内置] 释放 → " + dst);
+        }
         copyAsset(asset, dst);
+    }
+
+    /** 内置资源体积，读不到返回 -1。 */
+    private long assetSize(String asset) {
+        try (java.io.InputStream in = getAssets().open(asset)) {
+            return in.available();
+        } catch (IOException e) {
+            return -1;
+        }
     }
 
     /** 递归释放内置源码模板（marker 存在说明已释放过）。 */
@@ -211,20 +272,28 @@ public class TerminalActivity extends ThemedActivity {
     }
 
     private void copyAssetDir(String asset, File dir) throws IOException {
-        String[] names = getAssets().list(asset);
+        copyAssetDir(this, asset, dir);
+    }
+
+    private void copyAsset(String asset, File dst) throws IOException {
+        copyAsset(this, asset, dst);
+    }
+
+    private static void copyAssetDir(Context c, String asset, File dir) throws IOException {
+        String[] names = c.getAssets().list(asset);
         if (names == null) return;
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("无法创建目录: " + dir);
         for (String n : names) {
             String child = asset + "/" + n;
-            String[] sub = getAssets().list(child);
-            if (sub != null && sub.length > 0) copyAssetDir(child, new File(dir, n));
-            else copyAsset(child, new File(dir, n));
+            String[] sub = c.getAssets().list(child);
+            if (sub != null && sub.length > 0) copyAssetDir(c, child, new File(dir, n));
+            else copyAsset(c, child, new File(dir, n));
         }
     }
 
-    private void copyAsset(String asset, File dst) throws IOException {
+    private static void copyAsset(Context c, String asset, File dst) throws IOException {
         dst.getParentFile().mkdirs();
-        try (java.io.InputStream in = getAssets().open(asset);
+        try (java.io.InputStream in = c.getAssets().open(asset);
              java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
             byte[] buf = new byte[65536];
             int n;
@@ -235,21 +304,64 @@ public class TerminalActivity extends ThemedActivity {
     // ---------------------------------------------------------------- 环境
 
     private void refreshEnv() {
-        String miss = ProotRunner.missingBinaries(this);
-        String text;
-        try {
-            text = AndroidToolchain.describeEnv(this);
-        } catch (IOException e) {
-            text = e.getMessage();
-        }
-        if (!miss.isEmpty()) text += "⚠ " + miss + "\n（需把 proot 的 4 个 .so 放进 jniLibs/arm64-v8a）";
-        else if (!ProotRunner.ready(this)) text += "提示：Ubuntu 运行时 / Zig 工具链未安装，先去「包管理」安装（或本地导入）。";
-        String zigCur = ProotRunner.zigCurrentId(this);
-        if (!zigCur.isEmpty()) text += "\n当前 Zig：" + zigCur;
-        String abiHint = ProotRunner.abiSupportHint(this);
-        if (!abiHint.isEmpty()) text += "\n⚠ " + abiHint;
-        text += "\nproot 执行方式：" + (ProotRunner.suAvailable() ? "root (su)" : "应用进程（无 su）");
+        String ubuntu = ubuntuVersion();
+        String zig = ProotRunner.zigCurrentVersion(this);
+        String text = "Ubuntu " + (ubuntu.isEmpty() ? "未安装" : ubuntu)
+                + " · Zig " + (zig.isEmpty() ? "未安装" : zig);
+        // 环境不可用时给一个醒目提示，具体原因放在问号弹窗里
+        if (!ProotRunner.missingBinaries(this).isEmpty()
+                || !ProotRunner.abiSupportHint(this).isEmpty()) text = "⚠ " + text;
         env.setText(text);
+    }
+
+    /** 当前 rootfs 的 Ubuntu 版本号；未安装返回 ""。 */
+    private String ubuntuVersion() {
+        String id = ProotRunner.isX86(this) ? ProotRunner.ROOTFS_ID_X64 : ProotRunner.ROOTFS_ID;
+        String v = AndroidToolchain.packages(this).installedVersion(id);
+        return v == null ? "" : v;
+    }
+
+    /** 运行环境细则：架构、版本、目录、proot 执行方式与安装状态，仅在问号弹窗里展示。 */
+    private String envDetailText() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("设备架构：").append(ProotRunner.isX86(this) ? "x86_64" : "arm64-v8a");
+        String ubuntu = ubuntuVersion();
+        sb.append("\nUbuntu：").append(ubuntu.isEmpty() ? "未安装" : ubuntu);
+        String zig = ProotRunner.zigCurrentVersion(this);
+        sb.append("\nZig：").append(zig.isEmpty() ? "未安装" : zig);
+        try {
+            sb.append('\n').append(AndroidToolchain.describeEnv(this));
+        } catch (IOException e) {
+            sb.append('\n').append(e.getMessage());
+        }
+        String miss = ProotRunner.missingBinaries(this);
+        if (!miss.isEmpty()) sb.append("⚠ ").append(miss).append("\n（需把 proot 的 4 个 .so 放进 jniLibs/arm64-v8a）");
+        else if (!ProotRunner.ready(this)) sb.append("提示：Ubuntu 运行时 / Zig 工具链未安装，先去「包管理」安装（或本地导入）。");
+        String abiHint = ProotRunner.abiSupportHint(this);
+        if (!abiHint.isEmpty()) sb.append("\n⚠ ").append(abiHint);
+        sb.append("\nproot 执行方式：").append(ProotRunner.suAvailable() ? "root (su)" : "应用进程（无 su）");
+        return sb.toString();
+    }
+
+    /** 与包管理页同款的「运行环境」详情弹窗。 */
+    private void showEnvDetails() {
+        TextView tv = new TextView(this);
+        tv.setText(envDetailText());
+        tv.setTextSize(13);
+        tv.setTextColor(com.microui.zigeditor.ThemeSettings.color(this,
+                com.microui.zigeditor.R.attr.palette_on_surface));
+        tv.setLineSpacing(dp(4), 1f);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.setPadding(dp(24), dp(8), dp(24), dp(8));
+        sv.addView(tv);
+        new AlertDialog.Builder(this).setTitle("运行环境")
+                .setView(sv)
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     /** proot 不可用时回退 Android 宿主 shell；进程由 TerminalView 的尺寸回调启动。 */
@@ -267,7 +379,8 @@ public class TerminalActivity extends ThemedActivity {
                 hostShell = false;
                 try {
                     pb = ProotRunner.terminal(this, initialProjectPath, initialRunCommand,
-                            openEditorAfterRun ? NATIVE_INIT_OK_MARKER : null);
+                            openEditorAfterRun ? NATIVE_INIT_OK_MARKER : null,
+                            screen.getViewColumns(), screen.getViewRows());
                 } catch (IOException e) {
                     hostShell = true;
                     log("启动 proot 失败：" + e.getMessage() + "\n已回退到 Android 宿主 shell。");
@@ -319,6 +432,34 @@ public class TerminalActivity extends ThemedActivity {
         flushPendingOutput();
     }
 
+    /** 两指缩放时按档调整字号：放大一档 / 缩小一档，返回值复位累计缩放。 */
+    private void changeFontSize(boolean bigger) {
+        fontSizeSp = Math.max(10f, Math.min(32f, fontSizeSp + (bigger ? 1f : -1f)));
+        applyFontSize();
+    }
+
+    /** TerminalRenderer 接收像素值，按 scaledDensity 把 sp 换算成像素；左右边距同步为一个字符宽。 */
+    private void applyFontSize() {
+        int px = Math.round(fontSizeSp * getResources().getDisplayMetrics().scaledDensity);
+        screen.setTextSize(px);
+        int margin = Math.round(measureCharWidth(px));
+        android.view.ViewGroup.MarginLayoutParams lp =
+                (android.view.ViewGroup.MarginLayoutParams) screen.getLayoutParams();
+        if (lp.leftMargin != margin || lp.rightMargin != margin) {
+            lp.leftMargin = margin;
+            lp.rightMargin = margin;
+            screen.setLayoutParams(lp);
+        }
+    }
+
+    /** 等宽字体下一个字符 "X" 的像素宽度，用作终端左右留白。 */
+    private static float measureCharWidth(int textSizePx) {
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setTypeface(android.graphics.Typeface.MONOSPACE);
+        paint.setTextSize(textSizePx);
+        return paint.measureText("X");
+    }
+
     /** 原生项目 zig init 成功（shell 打出标记）后，自动进入项目编辑页。 */
     private void checkNativeInitDone() {
         if (!openEditorAfterRun || editorOpened || destroyed || session == null
@@ -359,9 +500,8 @@ public class TerminalActivity extends ThemedActivity {
     private void updateCtrlKey() {
         if (ctrlKey == null) return;
         ctrlKey.setText(ctrlArmed ? "Ctrl•" : "Ctrl");
-        ctrlKey.setTextColor(com.microui.zigeditor.ThemeSettings.color(this, ctrlArmed
-                ? com.microui.zigeditor.R.attr.palette_primary
-                : com.microui.zigeditor.R.attr.palette_on_surface_variant));
+        // 快捷键栏是黑底，普通态白色，按下 Ctrl 后用琥珀色提示
+        ctrlKey.setTextColor(ctrlArmed ? 0xFFFFD54F : Color.WHITE);
     }
 
     private void sendInput(String text) {
@@ -427,7 +567,13 @@ public class TerminalActivity extends ThemedActivity {
     }
 
     private final class ViewClient implements TerminalViewClient {
-        @Override public float onScale(float scale) { return scale; }
+        @Override public float onScale(float scale) {
+            if (scale < 0.9f || scale > 1.1f) {
+                changeFontSize(scale > 1f);
+                return 1f;
+            }
+            return scale;
+        }
         @Override public void onSingleTapUp(MotionEvent e) { showKeyboard(); }
         @Override public boolean shouldBackButtonBeMappedToEscape() { return false; }
         @Override public boolean shouldEnforceCharBasedInput() { return true; }
@@ -501,27 +647,16 @@ public class TerminalActivity extends ThemedActivity {
         screen.onScreenUpdated();
     }
 
-    /** Blueberry 深浅色同时作用于终端默认色、光标和 ANSI 16 色。 */
+    /**
+     * 终端固定黑底白字；ANSI 16 色沿用 Termux 默认的鲜艳配色，
+     * 这样 ls 的目录是蓝紫、可执行文件是绿色，观感与 Termux 一致。
+     */
     private void applyTerminalColors() {
-        boolean dark = (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        String background = dark ? "#111318" : "#F9F9FF";
+        String background = "#000000";
         Properties properties = new Properties();
         properties.setProperty("background", background);
-        properties.setProperty("foreground", dark ? "#E2E2E9" : "#1A1B20");
-        properties.setProperty("cursor", dark ? "#ADC6FF" : "#445E91");
-        String[] palette = dark ? new String[]{
-                "#111318", "#FFB4AB", "#8FD99A", "#E5C36A",
-                "#ADC6FF", "#E2B6E8", "#86D5E3", "#E2E2E9",
-                "#8E9099", "#FFDAD6", "#B3F0BC", "#F2DA92",
-                "#D8E2FF", "#F0D0F5", "#B0E8F2", "#F9F9FF"
-        } : new String[]{
-                "#1A1B20", "#BA1A1A", "#146C2E", "#725C00",
-                "#445E91", "#8E4585", "#006875", "#E2E2E9",
-                "#44474F", "#DE3730", "#1F8A43", "#8A7000",
-                "#5B77AA", "#A95D9F", "#008495", "#F9F9FF"
-        };
-        for (int i = 0; i < palette.length; i++) properties.setProperty("color" + i, palette[i]);
+        properties.setProperty("foreground", "#FFFFFF");
+        properties.setProperty("cursor", "#FFFFFF");
         TerminalColors.COLOR_SCHEME.updateWith(properties);
         screen.setBackgroundColor(Color.parseColor(background));
         if (session != null && session.getEmulator() != null) {
@@ -622,30 +757,66 @@ public class TerminalActivity extends ThemedActivity {
         String zigVer = ProotRunner.zigCurrentId(this);
         log("\n=== 编译动态库（原生 zig → .so · proot Ubuntu + "
                 + (zigVer.isEmpty() ? "zig 默认包" : zigVer) + "） ===");
-        final String soName = "lib" + dir.getName().replaceAll("[^A-Za-z0-9_]", "_") + ".so";
+        // 产物名用 zig 项目自身的名字（build.zig.zon 的 .name），不受外层文件夹改名影响
+        final String soName = "lib" + ProotRunner.projectZigName(dir) + ".so";
+        final String cmd = soCommand != null && !soCommand.trim().isEmpty()
+                ? soCommand.trim() : ProotRunner.defaultNativeLibCommand(soName);
+        final String exportDir = normalizeExportDir(soExportDir);
+        // 产物路径以命令里的 -femit-bin 为准：项目被外部改名后，配置里可能还留着旧文件名
+        final File so = resolveSoOutput(dir, cmd, soName);
+        log("[编译] 命令：" + cmd);
+        log("[导出] 目标：" + exportDir + "/" + so.getName());
         new Thread(() -> {
             try {
-                File so = new File(new File(dir, "zig-out"), soName);
-                int code = pipe(ProotRunner.buildNativeLib(this, dir, so));
+                int code = pipe(ProotRunner.buildNativeLib(this, dir, so, cmd));
                 if (code != 0 || !so.isFile()) {
                     log("[编译失败] exit=" + code + "，未生成 " + so);
                     return;
                 }
                 log("[编译成功] " + so + "  " + PackageManager.fmtBytes(so.length()));
-                exportToDownloads(so);
+                exportToDownloads(so, exportDir);
             } catch (Exception e) {
                 log("[异常] " + e);
             }
         }, "build-so").start();
     }
 
-    /** 把 .so 复制到系统「下载/Download」（API29+ 走 MediaStore 免权限；低版本退回应用外部目录）。 */
-    private void exportToDownloads(File so) {
+    /**
+     * 从编译命令推断产物文件：解析 -femit-bin=（支持引号、/work/ 绝对路径），
+     * 解析不到才退回默认的 zig-out/<fallbackName>。
+     */
+    private static File resolveSoOutput(File projectDir, String cmd, String fallbackName) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("-femit-bin=(?:\"([^\"]+)\"|(\\S+))").matcher(cmd);
+        if (m.find()) {
+            String p = (m.group(1) != null ? m.group(1) : m.group(2)).replace("\"", "").trim();
+            if (p.startsWith("/work/")) return new File(projectDir, p.substring("/work/".length()));
+            if (!p.startsWith("/")) return new File(projectDir, p);
+        }
+        return new File(new File(projectDir, "zig-out"), fallbackName);
+    }
+
+    /** 导出目录规范化：只接受系统「下载」目录，支持 Download/子目录；其它写法统一折到 Download 下。 */
+    private static String normalizeExportDir(String raw) {
+        String dir = raw == null ? "" : raw.trim().replace('\\', '/');
+        while (dir.startsWith("/")) dir = dir.substring(1);
+        if (dir.startsWith("sdcard/")) dir = dir.substring("sdcard/".length());
+        if (dir.startsWith("storage/emulated/0/")) dir = dir.substring("storage/emulated/0/".length());
+        if (dir.isEmpty() || "Download".equalsIgnoreCase(dir)) return "Download";
+        if (!dir.regionMatches(true, 0, "Download/", 0, 9)) dir = "Download/" + dir;
+        while (dir.endsWith("/")) dir = dir.substring(0, dir.length() - 1);
+        return dir;
+    }
+
+    /** 把 .so 复制到系统「下载」目录（API29+ 走 MediaStore 免权限；低版本退回应用外部目录）。 */
+    private void exportToDownloads(File so, String relDir) {
+        String rel = normalizeExportDir(relDir);
         if (Build.VERSION.SDK_INT >= 29) {
             try {
                 android.content.ContentValues v = new android.content.ContentValues();
                 v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, so.getName());
                 v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
+                v.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, rel);
                 android.net.Uri uri = getContentResolver().insert(
                         android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
                 if (uri != null) {
@@ -655,7 +826,7 @@ public class TerminalActivity extends ThemedActivity {
                         int k;
                         while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
                     }
-                    log("[导出] 已保存到 下载/Download：" + uri);
+                    log("[导出] 已保存到 " + rel + "/" + mediaDisplayName(uri, so.getName()));
                     return;
                 }
             } catch (Exception e) {
@@ -677,6 +848,19 @@ public class TerminalActivity extends ThemedActivity {
         }
     }
 
+    /** MediaStore 遇到重名会自动改成 (1)(2)，日志里显示实际落盘的文件名。 */
+    private String mediaDisplayName(android.net.Uri uri, String fallback) {
+        try (android.database.Cursor cur = getContentResolver().query(uri,
+                new String[]{android.provider.MediaStore.Downloads.DISPLAY_NAME}, null, null, null)) {
+            if (cur != null && cur.moveToFirst()) {
+                String n = cur.getString(0);
+                if (n != null && !n.isEmpty()) return n;
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
     /** 同步跑一个进程并把合并输出打到界面，返回 exit code。 */
     private int pipe(ProcessBuilder pb) throws IOException, InterruptedException {
         Process p = pb.redirectErrorStream(true).start();
@@ -690,10 +874,14 @@ public class TerminalActivity extends ThemedActivity {
 
     private void askInstall(File template, File so, File projectDir) {
         String[] meta = projectMeta(projectDir);
+        final File icon = resolveAppIcon(projectDir, meta[2]);
         String msg = "是否把 libmicrozig.so 打进模板 APK，签名并安装？";
         if (meta[1] != null) msg += "\n应用名称：" + meta[1];
         if (meta[0] != null) msg += "\n包名：" + meta[0];
-        if (meta[2] != null) msg += "\n图标：" + meta[2];
+        if (icon != null) {
+            boolean missing = meta[2] != null && !new File(projectDir, meta[2]).isFile();
+            msg += "\n图标：" + (missing ? "默认（未找到 " + meta[2] + "）" : icon.getName());
+        }
         new AlertDialog.Builder(this)
                 .setTitle("编译成功")
                 .setMessage(msg)
@@ -705,7 +893,6 @@ public class TerminalActivity extends ThemedActivity {
                     }
                     new Thread(() -> {
                         try {
-                            File icon = meta[2] != null ? new File(projectDir, meta[2]) : null;
                             File apk = BuildPipeline.buildAndInstall(this, template, so,
                                     meta[0], meta[1], icon, step -> log("[打包] " + step));
                             lastSignedApk = apk;
@@ -717,6 +904,27 @@ public class TerminalActivity extends ThemedActivity {
                 })
                 .setNegativeButton("稍后", null)
                 .show();
+    }
+
+    /**
+     * 项目图标：config.json 指定且文件存在时用它；
+     * 否则退回 APK 内置的默认图标（Zig 图标），而不是模板 APK 里的 SDL 图标。
+     */
+    private File resolveAppIcon(File projectDir, String name) {
+        if (name != null && !name.isEmpty()) {
+            File f = new File(projectDir, name);
+            if (f.isFile()) return f;
+        }
+        File out = new File(getCacheDir(), "default_icon.png");
+        try (java.io.InputStream in = getAssets().open("bundled/default_icon.png");
+             java.io.FileOutputStream os = new java.io.FileOutputStream(out)) {
+            byte[] buf = new byte[65536];
+            int k;
+            while ((k = in.read(buf)) > 0) os.write(buf, 0, k);
+            return out;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 读项目根目录的 config.json（兼容旧 microui.json）：[0]=包名，[1]=应用名，[2]=图标文件名。 */

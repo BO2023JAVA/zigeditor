@@ -4,7 +4,8 @@
 //! - ASCII 走内置图集（atlas.zig）；
 //! - 中文等 Unicode 字符用 SDL_ttf（FreeType）从内嵌字体栅格化到 512x512 动态纹理。
 //!
-//! 字体文件 font_simhei.ttf 编译期内嵌进 .so（@embedFile），免去 APK assets 访问。
+//! 字体文件 font.ttf 编译期内嵌进 .so（@embedFile），免去 APK assets 访问。
+//! 换字体直接替换 core/font.ttf 后重新编译。
 //! 若要减小体积，可换成裁剪过的子集字体（如思源黑体子集）。
 //! SDL 调用走 sdl3_android.zig 的手写绑定（Zig 0.16 无法为 Android 提供 cImport 所需 libc）。
 
@@ -13,7 +14,7 @@ const microui = @import("microui");
 const atlas = @import("atlas.zig");
 const sdl = @import("sdl3_android");
 
-const font_bytes = @embedFile("font_simhei.ttf");
+const font_bytes = @embedFile("font.ttf");
 
 // ===================== SDL 资源 =====================
 

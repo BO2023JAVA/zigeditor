@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.Spannable;
@@ -18,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AbsListView;
 import android.widget.BaseAdapter;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ImageView;
@@ -103,6 +105,10 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
             finish();
             return;
         }
+        // 旧的原生项目由 root 域 zig init 生成，src 属 root 导致保存失败，打开时后台补权限
+        repairProjectPermissions(projectDir);
+        // 文件树包含项目根目录本身，并默认展开
+        expandedDirs.add(projectDir.getAbsolutePath());
         // 项目声明了 zigVersion 时，进入项目即切到对应工具链
         com.microui.toolchain.ProotRunner.useZigForProject(this, projectDir);
         setContentView(R.layout.activity_editor);
@@ -131,13 +137,16 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
             recreate();
         });
         findViewById(R.id.new_zig_file).setOnClickListener(v -> showNewMenu());
-        findViewById(R.id.api_docs).setOnClickListener(v ->
-                startActivity(new android.content.Intent(this, DocsActivity.class)));
-        findViewById(R.id.compile_terminal).setOnClickListener(v ->
-                openTerminal(true));
+        findViewById(R.id.api_docs).setOnClickListener(v -> openDocs());
         // 终端入口：进入本项目的终端（自动 cd 到项目目录，不自动编译）
         findViewById(R.id.open_terminal).setOnClickListener(v ->
                 openTerminal(false));
+        // 原生 zig 项目：多一个「编译 so」入口，点击先弹编译设置
+        View soBuild = findViewById(R.id.native_so_build);
+        if ("native".equals(projectKind())) {
+            soBuild.setVisibility(View.VISIBLE);
+            soBuild.setOnClickListener(v -> showSoBuildDialog());
+        }
 
         tree = findViewById(R.id.file_tree);
         treeAdapter = new TreeAdapter();
@@ -159,9 +168,19 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         }
         EditorSettings.applyAll(editor, this);
 
+        // 底部字符快捷键区：点击插入到光标处
+        CharKeyBar charBar = findViewById(R.id.char_bar);
+        charBar.setKeys(EditorSettings.parseCharKeys(EditorSettings.charKeysRaw(this)));
+        charBar.setOnKeyInsert(editor::commitText);
+
         if (file == null) file = pickInitialFile();
-        if (file != null) openFile(file);
-        else fileName.setText("未选择文件");
+        if (file != null) {
+            // 展开所在目录，让入口文件（如 src/main.zig）在文件树里可见并高亮
+            expandTo(file.getParentFile());
+            openFile(file);
+        } else {
+            fileName.setText("未选择文件");
+        }
 
         rebuildTree();
         setupToolButtons();
@@ -180,12 +199,18 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         btnRedo = findViewById(R.id.btn_redo);
         btnUndo.setOnClickListener(v -> { if (editor.canUndo()) editor.undo(); });
         btnRedo.setOnClickListener(v -> { if (editor.canRedo()) editor.redo(); });
-        findViewById(R.id.btn_run).setOnClickListener(v -> {
+        Button run = findViewById(R.id.btn_run);
+        run.setOnClickListener(v -> {
             String kind = projectKind();
             String command = runCommand(kind);
             // APK 内置命令走原有编译、打包、签名、安装流程；其它命令在 Ubuntu 终端执行。
             if (!"native".equals(kind) && APK_RUN_COMMAND.equals(command)) openTerminal(true);
             else openTerminalRun(command);
+        });
+        // 长按运行键直接打开运行参数
+        run.setOnLongClickListener(v -> {
+            showRunSettings();
+            return true;
         });
         findViewById(R.id.btn_run_menu).setOnClickListener(v -> showTopMenu(v));
         editor.subscribeEvent(io.github.rosemoe.sora.event.ContentChangeEvent.class,
@@ -203,18 +228,28 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         btnRedo.setImageAlpha(canRedo ? 255 : 97);
     }
 
-    /** 项目内优先打开 main.zig，其次第一个 .zig。 */
+    /** 项目内优先打开入口文件 main.zig（根目录或 src/ 下），最后才退到其它 .zig。 */
     private File pickInitialFile() {
         File main = new File(projectDir, "main.zig");
         if (main.isFile()) return main;
+        // 原生项目 zig init 后的入口在 src/main.zig
+        File srcMain = new File(new File(projectDir, "src"), "main.zig");
+        if (srcMain.isFile()) return srcMain;
         File[] zigs = projectDir.listFiles((dir, name) -> name.endsWith(".zig"));
         if (zigs == null || zigs.length == 0) return null;
         Arrays.sort(zigs, Comparator.comparing(File::getName));
+        // build.zig 只是构建脚本，有别的源文件时不默认打开它
+        if (zigs.length > 1 && "build.zig".equals(zigs[0].getName())) return zigs[1];
         return zigs[0];
     }
 
     private void openFile(File f) {
-        if (f.equals(file) && loaded) return;
+        if (f.equals(file) && loaded) {
+            // 同一个文件已打开：仍要把单选高亮刷回来（长按别的文件后取消弹窗会出现选中错位）
+            selectedNode = f;
+            if (treeAdapter != null) treeAdapter.notifyDataSetChanged();
+            return;
+        }
         save(false);
         file = f;
         selectedNode = f;      // 打开文件时同步单选高亮
@@ -274,6 +309,24 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
     protected void onPause() {
         save(false);
         super.onPause();
+    }
+
+    /**
+     * su 环境下 proot 以真实 root 执行，旧版 zig init 生成的 src/ 属 root，App 无法写文件。
+     * 打开项目时若发现 src 不可写，就在后台用 su 补一次权限；无 su 的真机文件本就属 App，直接跳过。
+     */
+    private void repairProjectPermissions(File dir) {
+        File src = new File(dir, "src");
+        if (!src.isDirectory() || src.canWrite()) return;
+        if (!com.microui.toolchain.ProotRunner.suAvailable()) return;
+        final String path = dir.getAbsolutePath().replace("'", "'\\''");
+        new Thread(() -> {
+            try {
+                new ProcessBuilder("su", "-c", "chmod -R a+rwX '" + path + "'")
+                        .redirectErrorStream(true).start().waitFor();
+            } catch (Exception ignored) {
+            }
+        }, "fix-project-perms").start();
     }
 
     @Override
@@ -350,13 +403,14 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setHint("hello.zig");
         new AlertDialog.Builder(this)
-                .setTitle("新建 Zig 文件")
+                .setTitle("新建文件")
                 .setMessage("创建在：" + relPath(parent))
                 .setView(input)
                 .setPositiveButton("创建", (dialog, which) -> {
                     String name = input.getText().toString().trim();
                     if (name.isEmpty()) return;
-                    if (!name.endsWith(".zig")) name += ".zig";
+                    // 没写扩展名时默认按 Zig 源文件处理
+                    if (!name.contains(".")) name += ".zig";
                     if (name.contains("/") || name.contains("\\")) {
                         Toast.makeText(this, "文件名不能包含路径分隔符", Toast.LENGTH_SHORT).show();
                         return;
@@ -421,6 +475,89 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    private static final int REQ_IMPORT_FILES = 1001;
+
+    /** 从系统文件选择器导入外部文件，默认定位 Download，可多选，复制到当前选中目录。 */
+    private void showImportFiles() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                    android.provider.DocumentsContract.buildDocumentUri(
+                            "com.android.externalstorage.documents", "primary:Download"));
+        }
+        startActivityForResult(intent, REQ_IMPORT_FILES);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_IMPORT_FILES && resultCode == RESULT_OK && data != null) {
+            importFiles(data);
+        }
+    }
+
+    private void importFiles(Intent data) {
+        File parent = newTargetDir();
+        List<Uri> uris = new ArrayList<>();
+        android.content.ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) uris.add(clip.getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (uris.isEmpty()) return;
+
+        int ok = 0;
+        for (Uri uri : uris) {
+            String name = displayName(uri);
+            if (name == null || name.isEmpty()) name = "imported_file";
+            File target = uniqueFile(parent, name);
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+                 FileOutputStream out = new FileOutputStream(target)) {
+                if (in == null) continue;
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+                ok++;
+            } catch (Exception ignored) {
+            }
+        }
+        expandTo(parent);
+        rebuildTree();
+        Toast.makeText(this, "已导入 " + ok + " 个文件到 " + relPath(parent), Toast.LENGTH_SHORT).show();
+    }
+
+    private String displayName(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) return c.getString(idx);
+            }
+        } catch (Exception ignored) {
+        }
+        String seg = uri.getLastPathSegment();
+        if (seg == null) return null;
+        int slash = seg.lastIndexOf('/');
+        return slash >= 0 ? seg.substring(slash + 1) : seg;
+    }
+
+    /** 同名文件自动加 (1)(2) 后缀，不覆盖已有文件。 */
+    private File uniqueFile(File dir, String name) {
+        File f = new File(dir, name);
+        if (!f.exists()) return f;
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
+        for (int i = 1; i < 1000; i++) {
+            f = new File(dir, base + " (" + i + ")" + ext);
+            if (!f.exists()) return f;
+        }
+        return f;
     }
 
     /** 进入终端：autoCompile=true 时到终端后自动编译本项目。 */
@@ -493,6 +630,152 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
                 .show();
     }
 
+    /** 原生项目「编译 so」设置：默认编译命令 + 导出目录，点「编译」后进终端执行。 */
+    private void showSoBuildDialog() {
+        // 产物名取 zig 项目自身名字（build.zig.zon 的 .name），外层文件夹改名不影响
+        final String soName = "lib"
+                + com.microui.toolchain.ProotRunner.projectZigName(projectDir) + ".so";
+        final String defaultCmd = com.microui.toolchain.ProotRunner.defaultNativeLibCommand(soName);
+        org.json.JSONObject cfg = readProjectConfig();
+        // 上次保存的命令原样带回（用户改过输出名也保持），「恢复默认」才回到模板命令
+        String cmd = cfg.optString("soCommand", "").trim();
+        if (cmd.isEmpty()) cmd = defaultCmd;
+        String export = cfg.optString("soExport", "").trim();
+        if (export.isEmpty()) export = "Download";
+
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = dp(20);
+        box.setPadding(pad, dp(12), pad, 0);
+
+        TextView cmdLabel = new TextView(this);
+        cmdLabel.setText("编译命令（容器内执行，工作目录为项目根目录）");
+        cmdLabel.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
+        cmdLabel.setTextSize(13);
+        box.addView(cmdLabel);
+
+        EditText cmdInput = new EditText(this);
+        cmdInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        cmdInput.setTypeface(Typeface.MONOSPACE);
+        cmdInput.setSingleLine(true);
+        cmdInput.setText(cmd);
+        cmdInput.setHint(defaultCmd);
+        android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        box.addView(cmdInput, lp);
+
+        TextView exportLabel = new TextView(this);
+        exportLabel.setText("导出目录");
+        exportLabel.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
+        exportLabel.setTextSize(13);
+        android.widget.LinearLayout.LayoutParams labelLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelLp.topMargin = dp(14);
+        box.addView(exportLabel, labelLp);
+
+        EditText exportInput = new EditText(this);
+        exportInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        exportInput.setTypeface(Typeface.MONOSPACE);
+        exportInput.setSingleLine(true);
+        exportInput.setText(export);
+        exportInput.setHint("Download");
+        android.widget.LinearLayout.LayoutParams exportLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        exportLp.topMargin = dp(6);
+        box.addView(exportInput, exportLp);
+
+        TextView hint = new TextView(this);
+        hint.setText("导出仅支持系统「下载」目录及其子目录，例如 Download 或 Download/zigso。\n"
+                + "产物名以命令里的 -femit-bin 为准，默认 " + soName);
+        hint.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
+        hint.setTextSize(12);
+        hint.setLineSpacing(0, 1.15f);
+        android.widget.LinearLayout.LayoutParams hintLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hintLp.topMargin = dp(12);
+        box.addView(hint, hintLp);
+
+        new AlertDialog.Builder(this)
+                .setTitle("编译 so")
+                .setView(box)
+                .setPositiveButton("编译", (d, w) -> {
+                    String command = cmdInput.getText().toString().trim();
+                    if (command.isEmpty()) command = defaultCmd;
+                    String exportDir = exportInput.getText().toString().trim();
+                    if (exportDir.isEmpty()) exportDir = "Download";
+                    saveSoBuildSettings(command, exportDir);
+                    openSoBuild(command, exportDir);
+                })
+                .setNeutralButton("恢复默认", (d, w) -> {
+                    saveSoBuildSettings(defaultCmd, "Download");
+                    showSoBuildDialog();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /**
+     * 侧滑栏「文档」：图形界面项目看内置 microui API；
+     * 纯终端 / 原生 zig 项目打开对应 Zig 版本的官方文档（0.17.0 没有文档，用 0.17.1）。
+     */
+    private void openDocs() {
+        String kind = projectKind();
+        if (kind.isEmpty() || "gui".equals(kind)) {
+            startActivity(new android.content.Intent(this, DocsActivity.class));
+            return;
+        }
+        String ver = readProjectConfig().optString("zigVersion", "").trim();
+        if (ver.isEmpty()) ver = com.microui.toolchain.ProotRunner.zigCurrentVersion(this);
+        if (ver.startsWith("0.17.0")) ver = "0.17.1";
+        if (ver.isEmpty()) ver = "0.16.0";
+        String url = "https://ziglang.org/documentation/" + ver + "/";
+        try {
+            startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(this, "无法打开文档：" + url, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 编译设置按项目保存到 config.json（soCommand / soExport）。 */
+    private void saveSoBuildSettings(String command, String exportDir) {
+        File target = new File(projectDir, "config.json");
+        File tmp = new File(projectDir, "config.json.tmp");
+        try {
+            org.json.JSONObject config = readProjectConfig();
+            config.put("soCommand", command);
+            config.put("soExport", exportDir);
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(config.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            if (!tmp.renameTo(target)) {
+                try (FileOutputStream out = new FileOutputStream(target)) {
+                    out.write(config.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+                if (tmp.exists()) tmp.delete();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "保存编译设置失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 进终端执行原生 .so 编译（终端收到 AUTO_COMPILE + 自定义命令/导出目录）。 */
+    private void openSoBuild(String command, String exportDir) {
+        save(false);
+        android.content.Intent intent = new android.content.Intent(
+                this, com.microui.zigeditor.terminal.TerminalActivity.class);
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_PROJECT_DIR,
+                projectDir.getAbsolutePath());
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_AUTO_COMPILE, true);
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_SO_CMD, command);
+        intent.putExtra(com.microui.zigeditor.terminal.TerminalActivity.EXTRA_SO_EXPORT, exportDir);
+        startActivity(intent);
+    }
+
     private void saveRunCommand(String command) {
         File target = new File(projectDir, "config.json");
         File tmp = new File(projectDir, "config.json.tmp");
@@ -512,6 +795,57 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         } catch (Exception e) {
             Toast.makeText(this, "保存运行命令失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** 字符快捷键：英文逗号分隔，反斜杠转义；保存后立即刷新底部键区。 */
+    private void showCharKeySettings() {
+        EditText input = new EditText(this);
+        input.setTypeface(Typeface.MONOSPACE);
+        input.setTextSize(14);
+        input.setMinLines(4);
+        input.setMaxLines(10);
+        input.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        input.setText(EditorSettings.charKeysRaw(this));
+
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = dp(20);
+        box.setPadding(pad, dp(8), pad, 0);
+
+        TextView help = new TextView(this);
+        help.setText("用英文逗号分隔按键，反斜杠转义：\n"
+                + "\\, 逗号    \\\\ 反斜杠    \\t 制表符\n\n"
+                + "编辑页底部键区默认显示一行（每行 8 个），按住往上拖逐行展开，往下拖收起。");
+        help.setTextColor(ThemeSettings.color(this, R.attr.palette_on_surface_variant));
+        help.setTextSize(13);
+        help.setLineSpacing(0, 1.15f);
+        box.addView(help);
+
+        android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(12);
+        box.addView(input, lp);
+
+        new AlertDialog.Builder(this)
+                .setTitle("字符快捷键")
+                .setView(box)
+                .setPositiveButton("保存", (d, w) -> {
+                    String raw = input.getText().toString().trim();
+                    if (raw.isEmpty()) raw = EditorSettings.DEF_CHAR_KEYS;
+                    applyCharKeys(raw);
+                })
+                .setNeutralButton("恢复默认", (d, w) ->
+                        applyCharKeys(EditorSettings.DEF_CHAR_KEYS))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void applyCharKeys(String raw) {
+        EditorSettings.setCharKeysRaw(this, raw);
+        CharKeyBar bar = findViewById(R.id.char_bar);
+        if (bar != null) bar.setKeys(EditorSettings.parseCharKeys(raw));
     }
 
     /** 在终端执行项目运行命令，编译和程序输出都留在终端里。 */
@@ -553,6 +887,7 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         themeMenu.add("配色方案");
         themeMenu.add("代码配色");
         pm.getMenu().add("运行键参数");
+        pm.getMenu().add("字符快捷键");
         pm.getMenu().add("更新版本");
         pm.getMenu().add("关于");
         pm.setOnMenuItemClickListener(item -> {
@@ -562,6 +897,7 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
             else if ("配色方案".equals(title)) showSchemeSettings();
             else if ("代码配色".equals(title)) showSyntaxSettings();
             else if ("运行键参数".equals(title)) showRunSettings();
+            else if ("字符快捷键".equals(title)) showCharKeySettings();
             else if ("更新版本".equals(title)) showUpdateDialog();
             else if ("关于".equals(title)) showDonateDialog();
             return true;
@@ -917,18 +1253,95 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         }
     }
 
-    /** 长按文件树节点：重命名 / 删除。 */
+    /** 长按文件树节点：文件夹可新建/导入/重命名/删除，文件可重命名/删除。 */
     private void showNodeMenu(Node n) {
-        String[] items = n.dir
-                ? new String[]{"重命名", "删除文件夹"}
-                : new String[]{"重命名", "删除"};
-        new AlertDialog.Builder(this)
-                .setTitle(n.file.getName())
-                .setItems(items, (d, which) -> {
-                    if (which == 0) showRenameDialog(n);
-                    else confirmDelete(n);
-                })
-                .show();
+        selectedNode = n.file;
+        treeAdapter.notifyDataSetChanged();
+        boolean isRoot = n.file.equals(projectDir);
+        if (n.dir) {
+            final String[] items = isRoot
+                    ? new String[]{"新建文件", "新建文件夹", "导入外部文件"}
+                    : new String[]{"新建文件", "新建文件夹", "导入外部文件", "重命名", "删除文件夹"};
+            new AlertDialog.Builder(this)
+                    .setTitle(n.file.getName())
+                    .setItems(items, (d, which) -> {
+                        switch (which) {
+                            case 0: showNewFileDialog(); break;
+                            case 1: showNewFolderDialog(); break;
+                            case 2: showImportFiles(); break;
+                            case 3: showRenameDialog(n); break;
+                            default: confirmDelete(n); break;
+                        }
+                    })
+                    .show();
+        } else {
+            new AlertDialog.Builder(this)
+                    .setTitle(n.file.getName())
+                    .setItems(new String[]{"重命名", "导出到 Download 文件夹", "删除"}, (d, which) -> {
+                        if (which == 0) showRenameDialog(n);
+                        else if (which == 1) exportFileToDownloads(n.file);
+                        else confirmDelete(n);
+                    })
+                    .show();
+        }
+    }
+
+    /** 长按文件 → 导出到系统「下载」目录（API29+ 走 MediaStore，免存储权限；低版本退回应用外部目录）。 */
+    private void exportFileToDownloads(File f) {
+        if (!f.isFile()) return;
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            try {
+                android.content.ContentValues v = new android.content.ContentValues();
+                v.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, f.getName());
+                v.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
+                v.put(android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS);
+                android.net.Uri uri = getContentResolver().insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (uri != null) {
+                    try (java.io.OutputStream out = getContentResolver().openOutputStream(uri);
+                         java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                        byte[] buf = new byte[65536];
+                        int k;
+                        while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+                    }
+                    Toast.makeText(this, "已导出到 Download/" + mediaDisplayName(uri, f.getName()),
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "导出失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        File ext = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+        if (ext == null) {
+            Toast.makeText(this, "没有可用的外部存储", Toast.LENGTH_LONG).show();
+            return;
+        }
+        File dst = new File(ext, f.getName());
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f);
+             FileOutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[65536];
+            int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+            Toast.makeText(this, "已导出到 " + dst.getAbsolutePath(), Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "导出失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** MediaStore 重名会自动加 (1)(2)，提示里显示实际文件名。 */
+    private String mediaDisplayName(android.net.Uri uri, String fallback) {
+        try (android.database.Cursor cur = getContentResolver().query(uri,
+                new String[]{android.provider.MediaStore.Downloads.DISPLAY_NAME}, null, null, null)) {
+            if (cur != null && cur.moveToFirst()) {
+                String n = cur.getString(0);
+                if (n != null && !n.isEmpty()) return n;
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
     }
 
     private void showRenameDialog(Node n) {
@@ -1014,16 +1427,56 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
 
     // ---------------------------------------------------------------- 文件树
 
-    /** 侧滑栏里显示的文件类型（其余二进制/资源文件不列出来，避免误点进编辑器）。 */
-    private static final Set<String> TEXT_EXT = new HashSet<>(Arrays.asList(
-            "zig", "zon", "json", "md", "txt", "toml", "yaml", "yml", "xml", "ini", "cfg", "conf",
-            "sh", "c", "h", "cpp", "hpp", "py", "js", "ts", "html", "css"));
+    /** 已知的二进制/资源扩展名：列出来但不进编辑器打开。 */
+    private static final Set<String> BINARY_EXT = new HashSet<>(Arrays.asList(
+            "so", "a", "o", "bin", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg",
+            "ttf", "otf", "zip", "apk", "mp3", "mp4", "wav", "ogg", "pdf", "class", "jar"));
 
     private static boolean isTextFile(File f) {
         String n = f.getName().toLowerCase();
         if (n.startsWith(".")) return false;
         int dot = n.lastIndexOf('.');
-        return dot >= 0 && TEXT_EXT.contains(n.substring(dot + 1));
+        return dot < 0 || !BINARY_EXT.contains(n.substring(dot + 1));
+    }
+
+    /** 能否在文件树里直接预览的图片格式。 */
+    private static boolean isImage(File f) {
+        String n = f.getName().toLowerCase();
+        int dot = n.lastIndexOf('.');
+        if (dot < 0) return false;
+        String ext = n.substring(dot + 1);
+        return ext.equals("png") || ext.equals("jpg") || ext.equals("jpeg")
+                || ext.equals("webp") || ext.equals("gif") || ext.equals("bmp");
+    }
+
+    /** 弹窗预览图片，按屏幕尺寸降采样，避免大图占内存。 */
+    private void showImagePreview(File f) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        int maxW = dm.widthPixels;
+        int maxH = (int) (dm.heightPixels * 0.65f);
+        int sample = 1;
+        while ((o.outWidth / sample) > maxW || (o.outHeight / sample) > maxH) sample *= 2;
+        o.inJustDecodeBounds = false;
+        o.inSampleSize = sample;
+        android.graphics.Bitmap bmp =
+                android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+        if (bmp == null) {
+            Toast.makeText(this, "无法读取图片", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ImageView iv = new ImageView(this);
+        iv.setAdjustViewBounds(true);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        iv.setImageBitmap(bmp);
+        iv.setPadding(dp(8), dp(8), dp(8), dp(8));
+        new AlertDialog.Builder(this)
+                .setTitle(f.getName())
+                .setView(iv)
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     /** 按扩展名给个图标前缀，方便一眼分辨文件类型。 */
@@ -1062,7 +1515,9 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
 
     private void rebuildTree() {
         nodes.clear();
-        collect(projectDir, 0);
+        // 最外层项目文件夹本身也作为一项，便于选中后在它下面新建/导入
+        nodes.add(new Node(projectDir, 0, true));
+        if (expandedDirs.contains(projectDir.getAbsolutePath())) collect(projectDir, 1);
         treeAdapter.notifyDataSetChanged();
     }
 
@@ -1078,7 +1533,8 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
             if (f.isDirectory()) {
                 nodes.add(new Node(f, depth, true));
                 if (expandedDirs.contains(f.getAbsolutePath())) collect(f, depth + 1);
-            } else if (isTextFile(f)) {
+            } else if (!f.getName().startsWith(".")) {
+                // 所有文件都列出来（含导入的图片、动态库等），二进制文件只显示不打开
                 nodes.add(new Node(f, depth, false));
             }
         }
@@ -1092,6 +1548,17 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
             if (!expandedDirs.remove(key)) expandedDirs.add(key);
             rebuildTree();
         } else {
+            if (isImage(n.file)) {
+                // 图片不进编辑器，直接弹窗预览
+                showImagePreview(n.file);
+                treeAdapter.notifyDataSetChanged();
+                return;
+            }
+            if (!isTextFile(n.file)) {
+                Toast.makeText(this, "二进制文件，无法在编辑器中打开", Toast.LENGTH_SHORT).show();
+                treeAdapter.notifyDataSetChanged();
+                return;
+            }
             openFile(n.file);
             closeDrawer();
         }
@@ -1123,10 +1590,13 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
 
     private final class TreeAdapter extends BaseAdapter {
         private final ImageSpan zigIconSpan;
+        /** 图片缩略图缓存，key 为路径 + 修改时间。 */
+        private final java.util.HashMap<String, Drawable> thumbCache = new java.util.HashMap<>();
 
         TreeAdapter() {
             Drawable icon = getDrawable(R.drawable.zig_favicon);
-            int side = dp(16);
+            // 行高压缩后图标同步缩小，避免放大显示发虚
+            int side = dp(12);
             icon.setBounds(0, 0, side, side);
             zigIconSpan = new ImageSpan(icon, ImageSpan.ALIGN_BOTTOM);
         }
@@ -1135,36 +1605,77 @@ public class EditorActivity extends ThemedActivity implements DrawerRootLayout.L
         @Override public Node getItem(int i) { return nodes.get(i); }
         @Override public long getItemId(int i) { return i; }
 
+        /** 图片文件返回真实缩略图（14dp 方形），非图片或解码失败返回 null。 */
+        private Drawable imageThumb(File f) {
+            if (!isImage(f)) return null;
+            String key = f.getAbsolutePath() + ":" + f.lastModified();
+            Drawable cached = thumbCache.get(key);
+            if (cached != null) return cached;
+
+            int px = dp(14);
+            try {
+                android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                opts.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
+                int sample = 1;
+                while (opts.outWidth / (sample * 2) >= px && opts.outHeight / (sample * 2) >= px) {
+                    sample *= 2;
+                }
+                opts.inJustDecodeBounds = false;
+                opts.inSampleSize = sample;
+                android.graphics.Bitmap src =
+                        android.graphics.BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
+                if (src == null) return null;
+                android.graphics.Bitmap scaled =
+                        android.graphics.Bitmap.createScaledBitmap(src, px, px, true);
+                if (scaled != src) src.recycle();
+                Drawable d = new android.graphics.drawable.BitmapDrawable(getResources(), scaled);
+                d.setBounds(0, 0, px, px);
+                thumbCache.put(key, d);
+                return d;
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
         @Override
         public View getView(int position, View convert, ViewGroup parent) {
             TextView tv = convert instanceof TextView ? (TextView) convert : new TextView(EditorActivity.this);
             tv.setTypeface(Typeface.MONOSPACE);
             tv.setTextSize(13);
+            tv.setIncludeFontPadding(false);
             tv.setGravity(Gravity.CENTER_VERTICAL);
             tv.setSingleLine(true);
             if (convert == null) {
                 tv.setLayoutParams(new AbsListView.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(28)));
             }
             Node n = nodes.get(position);
             boolean expanded = n.dir && expandedDirs.contains(n.file.getAbsolutePath());
-            String arrow = n.dir ? (expanded ? "▾ " : "▸ ") : "   ";
-            String icon = n.dir ? (expanded ? "📂" : "📁") : iconFor(n.file.getName());
-            String rowText = arrow + icon + "  " + n.file.getName();
-            if (!n.dir && "⚡".equals(icon)) {
-                SpannableString text = new SpannableString(rowText);
-                text.setSpan(zigIconSpan, arrow.length(), arrow.length() + icon.length(),
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            // 文件夹只显示展开箭头；图片文件直接把缩略图当图标，其余文件用类型图标
+            Drawable thumb = n.dir ? null : imageThumb(n.file);
+            if (n.dir) {
+                tv.setText((expanded ? "▾ " : "▸ ") + n.file.getName());
+            } else if (thumb != null) {
+                SpannableString text = new SpannableString("  " + n.file.getName());
+                text.setSpan(new ImageSpan(thumb, ImageSpan.ALIGN_BOTTOM),
+                        0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                tv.setText(text);
+            } else if ("⚡".equals(iconFor(n.file.getName()))) {
+                SpannableString text = new SpannableString(
+                        iconFor(n.file.getName()) + " " + n.file.getName());
+                text.setSpan(zigIconSpan, 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
                 tv.setText(text);
             } else {
-                tv.setText(rowText);
+                tv.setText(iconFor(n.file.getName()) + " " + n.file.getName());
             }
-            tv.setPadding(dp(12 + n.depth * 16), 0, dp(12), 0);
-            // 单选高亮：M3 导航选中胶囊，同时保证深浅色主题下的文字对比度
+            tv.setPadding(dp(8 + n.depth * 14), 0, dp(8), 0);
+            // 选中行用整行浅底色，和 VSCode 资源管理器一致
             boolean selected = n.file.equals(selectedNode);
-            tv.setTextColor(ThemeSettings.color(EditorActivity.this, selected ? R.attr.palette_on_primary_container
-                    : n.dir ? R.attr.palette_on_surface : R.attr.palette_on_surface_variant));
-            tv.setBackgroundResource(selected ? R.drawable.m3_nav_indicator : 0);
+            tv.setTextColor(ThemeSettings.color(EditorActivity.this, selected
+                    ? R.attr.palette_on_primary_container : R.attr.palette_on_surface));
+            tv.setBackgroundColor(selected
+                    ? ThemeSettings.color(EditorActivity.this, R.attr.palette_primary_container) : 0);
             return tv;
         }
     }

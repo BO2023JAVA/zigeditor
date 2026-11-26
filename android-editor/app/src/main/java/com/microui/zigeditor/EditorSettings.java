@@ -42,6 +42,14 @@ public final class EditorSettings {
     public static final String KEY_SYNTAX_SCHEME = "syntax_scheme";   // 0 跟随界面 1 One Dark ...
     public static final int DEF_SYNTAX_SCHEME = 0;
 
+    // ---- 字符快捷键 ----
+    public static final String KEY_CHAR_KEYS = "char_keys";
+    /** 默认按键：英文逗号分隔，反斜杠转义（\\t 制表符、\\, 逗号、\\\\ 反斜杠）。 */
+    public static final String DEF_CHAR_KEYS =
+            "\\t,{,},(,),[,],;,<,>,=,+,-,*,/,&,|,!,?,:,\",',@,#,$,%,^,~,_,\\,,.,\\\\";
+
+    private static final String KEY_INDENT_MIGRATED = "indent_on_migrated";
+
     // ---- 默认值（与 sora-editor 默认行为保持一致，避免覆盖现有体验）----
     public static final boolean DEF_WORDWRAP = false;
     public static final int DEF_TEXT_SIZE = 18;
@@ -81,8 +89,49 @@ public final class EditorSettings {
         SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (!p.getBoolean(KEY_INIT, false)) {
             writeDefaults(p.edit()).apply();
+        } else if (!p.getBoolean(KEY_INDENT_MIGRATED, false)) {
+            // 旧版本默认关闭自动缩进；统一改成默认打开一次
+            p.edit().putBoolean(KEY_AUTO_INDENT, true)
+                    .putBoolean(KEY_INDENT_MIGRATED, true).apply();
         }
         return p;
+    }
+
+    public static String charKeysRaw(Context ctx) {
+        return prefs(ctx).getString(KEY_CHAR_KEYS, DEF_CHAR_KEYS);
+    }
+
+    public static void setCharKeysRaw(Context ctx, String raw) {
+        prefs(ctx).edit().putString(KEY_CHAR_KEYS, raw).apply();
+    }
+
+    /**
+     * 解析字符快捷键：英文逗号分隔；反斜杠转义，
+     * \t 制表符、\n 换行、\, 逗号、\\ 反斜杠，其它 \x 按 x 处理。
+     */
+    public static java.util.List<String> parseCharKeys(String raw) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        StringBuilder cur = new StringBuilder();
+        boolean escaped = false;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (escaped) {
+                if (c == 't') cur.append('\t');
+                else if (c == 'n') cur.append('\n');
+                else cur.append(c);
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == ',') {
+                if (cur.length() > 0) out.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(c);
+            }
+        }
+        if (cur.length() > 0) out.add(cur.toString());
+        return out;
     }
 
     private static SharedPreferences.Editor writeDefaults(SharedPreferences.Editor e) {
@@ -102,6 +151,8 @@ public final class EditorSettings {
         e.putBoolean(KEY_STICKY_SCROLL, DEF_STICKY_SCROLL);
         e.putBoolean(KEY_OVER_SCROLL, DEF_OVER_SCROLL);
         e.putInt(KEY_SYNTAX_SCHEME, DEF_SYNTAX_SCHEME);
+        e.putString(KEY_CHAR_KEYS, DEF_CHAR_KEYS);
+        e.putBoolean(KEY_INDENT_MIGRATED, true);
         return e;
     }
 

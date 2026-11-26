@@ -17,6 +17,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.microui.zigeditor.ThemedActivity;
+import com.microui.zigeditor.ThemeSettings;
 import com.microui.toolchain.AndroidToolchain;
 import com.microui.toolchain.DownloadConfig;
 import com.microui.toolchain.PackageJobs;
@@ -67,8 +68,99 @@ public class PackagesActivity extends ThemedActivity {
     private ListView list;
     private TextView status, disk;
     private ProgressBar bar;
+    /** 下拉刷新的居中转圈：刷新期间显示，至少停留 600ms 以免一闪而过。 */
+    private ProgressBar loading;
+    private long loadingSince;
     private File manifestFile;
     private String baseUrl = "";
+
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    /** 下拉刷新：列表在顶部时向下拖过阈值松手即重新拉取索引（不引入第三方下拉控件）。 */
+    private float pullStartY = -1;
+    private boolean pullActive;
+    private boolean pullArmed;
+    /** 空闲时隐藏状态行（下拉刷新过程中不隐藏，用于显示「下拉刷新/松开刷新」）。 */
+    private final Runnable hideIdleStatus = () -> {
+        if (!hasActiveJob() && !pullActive) status.setVisibility(View.GONE);
+    };
+
+    private final View.OnTouchListener pullToRefresh = (v, e) -> {
+        switch (e.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                pullStartY = atListTop() ? e.getY() : -1;
+                pullArmed = false;
+                pullActive = false;
+                break;
+            case android.view.MotionEvent.ACTION_MOVE: {
+                if (pullStartY < 0) break;
+                float dy = e.getY() - pullStartY;
+                if (dy < 0) {
+                    // 手指往回上移：交还给列表滚动，本次下拉作废
+                    resetPull();
+                    break;
+                }
+                if (!pullActive && dy < dp(20)) break; // 位移太小，不算下拉
+                pullActive = true;
+                pullArmed = dy >= dp(72);
+                ui.removeCallbacks(hideIdleStatus);
+                status.setText(pullArmed ? "松开刷新" : "下拉刷新");
+                status.setVisibility(View.VISIBLE);
+                break;
+            }
+            case android.view.MotionEvent.ACTION_UP: {
+                // 只有真正松手、且松手时仍超过阈值才刷新
+                boolean reload = pullStartY >= 0 && (e.getY() - pullStartY) >= dp(72);
+                resetPull();
+                if (reload) {
+                    showLoading();
+                    loadIndex();
+                }
+                break;
+            }
+            case android.view.MotionEvent.ACTION_CANCEL:
+                // 手势被系统取消（未真正松手）：只复位，不刷新
+                resetPull();
+                break;
+            default:
+                break;
+        }
+        // 不拦截触摸，保留列表原有滚动与点击
+        return false;
+    };
+
+    private boolean atListTop() {
+        return list.getFirstVisiblePosition() == 0
+                && (list.getChildCount() == 0 || list.getChildAt(0).getTop() >= 0);
+    }
+
+    private void resetPull() {
+        pullActive = false;
+        pullArmed = false;
+        pullStartY = -1;
+        if (!hasActiveJob()) status.setVisibility(View.GONE);
+    }
+
+    /** 显示列表居中的转圈动画（下拉刷新触发）。 */
+    private void showLoading() {
+        loadingSince = System.currentTimeMillis();
+        loading.setVisibility(View.VISIBLE);
+    }
+
+    /** 收起转圈；显示不足 600ms 时补足，避免刷新太快导致动画一闪而过。 */
+    private void hideLoading() {
+        final long since = loadingSince;
+        long delay = Math.max(0, 600 - (System.currentTimeMillis() - since));
+        ui.postDelayed(() -> {
+            if (loadingSince == since && loading.getVisibility() == View.VISIBLE)
+                loading.setVisibility(View.GONE);
+        }, delay);
+    }
+
+    private boolean hasActiveJob() {
+        if (jobs == null) return false;
+        for (PackageJobs.Job j : jobs.jobs()) if (j.isActive()) return true;
+        return false;
+    }
 
     private final PackageJobs.Listener onJobsChanged = () -> runOnUiThread(this::refresh);
 
@@ -85,17 +177,17 @@ public class PackagesActivity extends ThemedActivity {
         status = findViewById(com.microui.zigeditor.R.id.pkg_status);
         disk = findViewById(com.microui.zigeditor.R.id.pkg_disk);
         bar = findViewById(com.microui.zigeditor.R.id.pkg_progress);
+        loading = findViewById(com.microui.zigeditor.R.id.pkg_loading);
         adapter = new PkgAdapter();
         list.setAdapter(adapter);
+        list.setOnTouchListener(pullToRefresh);
         list.setOnItemClickListener((parent, view, position, id) -> {
             Row r = rows.get(position);
             if (r.pkg == null) showZigVersions();
             else showActions(r.pkg);
         });
 
-        findViewById(com.microui.zigeditor.R.id.pkg_refresh).setOnClickListener(v -> loadIndex());
-        findViewById(com.microui.zigeditor.R.id.pkg_repo).setOnClickListener(v -> editRepo());
-        findViewById(com.microui.zigeditor.R.id.pkg_import).setOnClickListener(v -> pickArchive());
+        findViewById(com.microui.zigeditor.R.id.pkg_env_help).setOnClickListener(v -> showEnvDetails());
         findViewById(com.microui.zigeditor.R.id.pkg_zig_top).setOnClickListener(v -> showZigTop());
         loadZigDevProgress();
 
@@ -115,14 +207,21 @@ public class PackagesActivity extends ThemedActivity {
         super.onPause();
     }
 
-    /** Zig 0.18.0 开发进度（来自 Codeberg milestones），为空表示未获取到，不显示进度条。 */
+    /** Zig 0.18.0 里程碑进度（来自 Codeberg milestones），为空表示未获取到，不显示进度条。 */
     private String zigDevText = "";
     private int zigDevPct;
 
     /** 「浏览 Zig 项目」弹窗；连点时挡住重复弹出。 */
     private AlertDialog zigTopDialog;
 
-    /** 弹窗内嵌 WebView 打开 gitcn 的 Zig 热门项目榜，链接都在弹窗内打开。 */
+    /** 弹窗里的两个页签：GitHub 上的 Zig 项目 / Zig 官方仓库（Codeberg）。 */
+    private static final String[] ZIG_TAB_TITLES = {"GitHub 项目", "Zig 仓库"};
+    private static final String[] ZIG_TAB_URLS = {
+            "https://github.com/search?q=zig+language%3AZig&type=repositories&l=Zig",
+            "https://codeberg.org/ziglang/zig"
+    };
+
+    /** 弹窗内嵌 WebView + 顶部页签，链接都在弹窗内打开。 */
     private void showZigTop() {
         if (zigTopDialog != null && zigTopDialog.isShowing()) return;
 
@@ -138,12 +237,38 @@ public class PackagesActivity extends ThemedActivity {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
+
+        // 页签行（等宽两栏）+ 底部分割线
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        final TextView[] tabViews = new TextView[ZIG_TAB_TITLES.length];
+        for (int i = 0; i < ZIG_TAB_TITLES.length; i++) {
+            TextView t = new TextView(this);
+            t.setText(ZIG_TAB_TITLES[i]);
+            t.setTextSize(14);
+            t.setGravity(android.view.Gravity.CENTER);
+            t.setPadding(0, dp(10), 0, dp(10));
+            tabs.addView(t, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            tabViews[i] = t;
+        }
+        box.addView(tabs, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        View tabLine = new View(this);
+        tabLine.setBackgroundColor(ThemeSettings.color(this, com.microui.zigeditor.R.attr.palette_outline_variant));
+        box.addView(tabLine, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+
         ProgressBar loading = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         loading.setMax(100);
         box.addView(loading, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         int height = (int) (getResources().getDisplayMetrics().heightPixels * 0.65f);
         box.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height));
+
+        for (int i = 0; i < tabViews.length; i++) {
+            final int idx = i;
+            tabViews[i].setOnClickListener(v -> selectZigTab(tabViews, web, idx));
+        }
 
         web.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
@@ -169,7 +294,7 @@ public class PackagesActivity extends ThemedActivity {
                 return false;
             }
         });
-        web.loadUrl("https://github.com/search?q=zig+language%3AZig&type=repositories&l=Zig");
+        selectZigTab(tabViews, web, 0);
 
         zigTopDialog = new AlertDialog.Builder(this)
                 .setTitle("Zig 项目")
@@ -182,6 +307,19 @@ public class PackagesActivity extends ThemedActivity {
             zigTopDialog = null;
         });
         zigTopDialog.show();
+    }
+
+    /** 切换页签：选中项加粗 + 主题色，并让 WebView 载入对应页面。 */
+    private void selectZigTab(TextView[] tabViews, android.webkit.WebView web, int idx) {
+        int accent = ThemeSettings.color(this, com.microui.zigeditor.R.attr.palette_primary);
+        int normal = ThemeSettings.color(this, com.microui.zigeditor.R.attr.palette_on_surface_variant);
+        for (int i = 0; i < tabViews.length; i++) {
+            boolean on = i == idx;
+            tabViews[i].setTextColor(on ? accent : normal);
+            tabViews[i].setTypeface(null, on
+                    ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+        }
+        web.loadUrl(ZIG_TAB_URLS[idx]);
     }
 
     // ---------------------------------------------------------------- 配置
@@ -228,9 +366,8 @@ public class PackagesActivity extends ThemedActivity {
         try {
             boolean refreshed = syncBundledManifest();
             if (refreshed) clearObsoleteFailures();
+            // 本地索引静默刷新：不占用状态行，parseAndShow → refresh 负责重绘并收起提示
             parseAndShow(new String(Files.readAllBytes(manifestFile.toPath()), StandardCharsets.UTF_8));
-            busy(false, refreshed ? "内置索引已更新（下载源随 APK 版本）"
-                    : "本地索引：" + manifestFile.getName());
         } catch (Exception e) {
             busy(false, "读取索引失败：" + e.getMessage());
         }
@@ -279,6 +416,7 @@ public class PackagesActivity extends ThemedActivity {
             for (Pkg p : Pkg.parseIndex(json))
                 if (ProotRunner.abiSupported(this, p.abi)) pkgs.add(p);
             refresh();
+            hideLoading();
         } catch (Exception e) {
             busy(false, "索引格式错误：" + e.getMessage());
         }
@@ -339,6 +477,8 @@ public class PackagesActivity extends ThemedActivity {
 
     /** 磁盘统计很慢（几万个文件递归），后台算好后一次性刷新，refresh 本身不得触碰目录树。 */
     private volatile String diskText = "";
+    /** 运行环境细则（架构/当前 Zig/目录/占用/已安装明细），仅在问号弹窗中展示。 */
+    private volatile String envDetail = "";
     private volatile Map<String, String> usageCache = java.util.Collections.emptyMap();
     private volatile boolean diskComputing;
 
@@ -346,21 +486,59 @@ public class PackagesActivity extends ThemedActivity {
         if (diskComputing) return;
         diskComputing = true;
         new Thread(() -> {
-            StringBuilder sb = new StringBuilder("磁盘占用 ").append(PackageManager.fmtBytes(pm.totalDiskUsage()));
+            long total = pm.totalDiskUsage();
             Map<String, String> usage = new HashMap<>();
-            for (String id : pm.listInstalled()) {
-                sb.append("\n  ").append(pm.describe(id));
-                if (pm.installedVersion(id) != null)
-                    usage.put(id, PackageManager.fmtBytes(pm.diskUsage(id)));
+            StringBuilder detail = new StringBuilder();
+            detail.append("设备架构：").append(ProotRunner.isX86(this) ? "x86_64" : "arm64-v8a");
+            String cur = ProotRunner.zigCurrentVersion(this);
+            detail.append("\n当前 Zig：").append(cur.isEmpty() ? "未安装" : cur);
+            detail.append("\n包根目录：").append(pm.root().getAbsolutePath());
+            detail.append("\n磁盘占用：").append(PackageManager.fmtBytes(total));
+            List<String> installed = pm.listInstalled();
+            if (!installed.isEmpty()) {
+                detail.append("\n\n已安装（").append(installed.size()).append("）");
+                for (String id : installed) {
+                    String size = PackageManager.fmtBytes(pm.diskUsage(id));
+                    detail.append('\n').append(pm.describe(id)).append("\n  磁盘占用 ").append(size);
+                    if (pm.installedVersion(id) != null) usage.put(id, size);
+                }
             }
-            diskText = sb.toString();
+            diskText = "磁盘占用 " + PackageManager.fmtBytes(total);
+            envDetail = detail.toString();
             usageCache = usage;
             diskComputing = false;
             runOnUiThread(() -> {
                 disk.setText(diskText);
+                // 细则弹窗已打开时，统计完成即回填内容
+                if (envDialogText != null) envDialogText.setText(envDetail);
                 adapter.notifyDataSetChanged();
             });
         }, "disk").start();
+    }
+
+    /** 运行环境细则弹窗中的文本视图；统计未完成时先占位，完成后回填。 */
+    private TextView envDialogText;
+
+    /** 问号弹窗：运行环境与各包磁盘占用细则（不再铺在包管理页里），下载源入口也收在这里。 */
+    private void showEnvDetails() {
+        String text = envDetail.isEmpty() ? "正在统计磁盘占用…" : envDetail;
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(13);
+        tv.setTextColor(com.microui.zigeditor.ThemeSettings.color(this,
+                com.microui.zigeditor.R.attr.palette_on_surface));
+        tv.setLineSpacing(dp(4), 1f);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.setPadding(dp(24), dp(8), dp(24), dp(8));
+        sv.addView(tv);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("运行环境")
+                .setView(sv)
+                .setNeutralButton("下载源", (d, w) -> editRepo())
+                .setPositiveButton("关闭", null)
+                .create();
+        envDialogText = tv;
+        dialog.setOnDismissListener(d -> envDialogText = null);
+        dialog.show();
     }
 
     private void refresh() {
@@ -377,6 +555,7 @@ public class PackagesActivity extends ThemedActivity {
         }
         if (active == null && paused != null) {
             bar.setVisibility(ProgressBar.VISIBLE);
+            status.setVisibility(View.VISIBLE);
             if (paused.total > 0) {
                 bar.setIndeterminate(false);
                 bar.setMax(1000);
@@ -389,6 +568,7 @@ public class PackagesActivity extends ThemedActivity {
         }
         if (active != null) {
             status.setText(active.id + " · " + PackageJobs.fmtProgress(active));
+            status.setVisibility(View.VISIBLE);
             bar.setVisibility(ProgressBar.VISIBLE);
             if (active.total > 0) {
                 bar.setIndeterminate(false);
@@ -398,9 +578,9 @@ public class PackagesActivity extends ThemedActivity {
                 bar.setIndeterminate(true);
             }
         } else {
+            // 空闲时不占一行（原来的「就绪」提示已去掉），只在有临时消息或下拉时显示
             bar.setVisibility(ProgressBar.GONE);
-            status.setText(cfg.mirrorPrefix.isEmpty() ? "就绪（下载源来自 manifest.urls）"
-                    : "就绪（镜像前缀 " + cfg.mirrorPrefix + "）");
+            if (!pullActive) status.setVisibility(View.GONE);
         }
     }
 
@@ -530,7 +710,7 @@ public class PackagesActivity extends ThemedActivity {
         return v;
     }
 
-    /** 拉取 Codeberg 上 Zig 0.18.0 milestone 的 issue 完成情况并显示进度条；网络失败或没有该里程碑时保持隐藏。 */
+    /** 拉取 Codeberg 上 Zig 0.18.0 milestone 的 issue 完成情况并显示里程碑进度条；网络失败或没有该里程碑时保持隐藏。 */
     private void loadZigDevProgress() {
         new Thread(() -> {
             try {
@@ -558,7 +738,7 @@ public class PackagesActivity extends ThemedActivity {
                     int total = open + closed;
                     if (total <= 0) return;
                     zigDevPct = Math.round(closed * 100f / total);
-                    zigDevText = "0.18.0 开发进度 " + zigDevPct + "%（" + closed + "/" + total + "）";
+                    zigDevText = "0.18.0 里程碑进度 " + zigDevPct + "%";
                     runOnUiThread(() -> {
                         if (!isFinishing() && !isDestroyed()) adapter.notifyDataSetChanged();
                     });
@@ -648,6 +828,8 @@ public class PackagesActivity extends ThemedActivity {
         new AlertDialog.Builder(this)
                 .setTitle("Zig 版本")
                 .setItems(labels.toArray(new String[0]), (d, which) -> showActions(zig.get(which)))
+                // 本地导入只服务 Zig 官方包，入口收进版本弹窗
+                .setNeutralButton("本地导入", (d, w) -> pickArchive())
                 .setNegativeButton("关闭", null)
                 .show();
     }
@@ -886,10 +1068,19 @@ public class PackagesActivity extends ThemedActivity {
     // ---------------------------------------------------------------- UI 工具
 
     private void busy(boolean running, String msg) {
+        ui.removeCallbacks(hideIdleStatus);
         status.setText(msg);
-        if (running) bar.setVisibility(ProgressBar.VISIBLE);
-        else if (!jobs.jobs().isEmpty()) return; // 有后台任务时保持进度条
-        else bar.setVisibility(ProgressBar.GONE);
+        status.setVisibility(View.VISIBLE);
+        if (!running) hideLoading();
+        if (running) {
+            bar.setVisibility(ProgressBar.VISIBLE);
+        } else if (!jobs.jobs().isEmpty()) {
+            // 有后台任务时保持进度条（refresh 会接管显示）
+        } else {
+            // 临时提示（索引已更新/失败原因等）显示几秒后自动收起，避免常驻一行
+            bar.setVisibility(ProgressBar.GONE);
+            ui.postDelayed(hideIdleStatus, 5000);
+        }
     }
 
     private void editRepo() {

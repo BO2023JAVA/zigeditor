@@ -86,11 +86,29 @@
 
         </LinearLayout>
 
+        <!-- 顶栏与编辑区之间的浅分割线 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/palette_outline_variant" />
+
         <io.github.rosemoe.sora.widget.CodeEditor
             android:id="@+id/editor"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1" />
+
+        <!-- 字符键区上方的浅分割线 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/palette_outline_variant" />
+
+        <!-- 字符快捷键区：默认一行，按住往上拖逐行展开 -->
+        <com.microui.zigeditor.CharKeyBar
+            android:id="@+id/char_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
 
     </LinearLayout>
 
@@ -144,79 +162,65 @@
                 android:textSize="11sp" />
         </LinearLayout>
 
-        <!-- 操作按钮：圆角 tonal 样式 -->
+        <!-- 操作按钮：圆形 tonal 图标按钮（新建 / 终端 / Api；原生项目额外显示「编译 so」） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="12dp"
             android:paddingEnd="6dp"
             android:paddingBottom="10dp">
 
-            <Button
+            <ImageButton
                 android:id="@+id/new_zig_file"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/m3_button_tonal"
-                android:foreground="?android:attr/selectableItemBackground"
-                android:minWidth="0dp"
-                android:padding="0dp"
-                android:stateListAnimator="@null"
-                android:text="新建"
-                android:textAllCaps="false"
-                android:textColor="?attr/palette_on_secondary_container"
-                android:textSize="12sp" />
-
-            <Button
-                android:id="@+id/compile_terminal"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/m3_button_tonal"
-                android:foreground="?android:attr/selectableItemBackground"
-                android:minWidth="0dp"
-                android:padding="0dp"
-                android:stateListAnimator="@null"
-                android:text="编译"
-                android:textAllCaps="false"
-                android:textColor="?attr/palette_on_secondary_container"
-                android:textSize="12sp" />
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/m3_icon_button_tonal"
+                android:contentDescription="新建文件或文件夹"
+                android:foreground="?android:attr/selectableItemBackgroundBorderless"
+                android:padding="9dp"
+                android:src="@drawable/ic_add"
+                android:tint="?attr/palette_on_secondary_container" />
 
             <!-- 终端入口：进入本项目的终端（自动 cd 到项目目录） -->
-            <Button
+            <ImageButton
                 android:id="@+id/open_terminal"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/m3_button_tonal"
-                android:foreground="?android:attr/selectableItemBackground"
-                android:minWidth="0dp"
-                android:padding="0dp"
-                android:stateListAnimator="@null"
-                android:text="终端"
-                android:textAllCaps="false"
-                android:textColor="?attr/palette_on_secondary_container"
-                android:textSize="12sp" />
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/m3_icon_button_tonal"
+                android:contentDescription="终端"
+                android:foreground="?android:attr/selectableItemBackgroundBorderless"
+                android:padding="9dp"
+                android:src="@drawable/ic_terminal"
+                android:tint="?attr/palette_on_secondary_container" />
 
-            <Button
+            <ImageButton
                 android:id="@+id/api_docs"
-                android:layout_width="0dp"
-                android:layout_height="38dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/m3_button_tonal"
-                android:foreground="?android:attr/selectableItemBackground"
-                android:minWidth="0dp"
-                android:padding="0dp"
-                android:stateListAnimator="@null"
-                android:text="Api"
-                android:textAllCaps="false"
-                android:textColor="?attr/palette_on_secondary_container"
-                android:textSize="12sp" />
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/m3_icon_button_tonal"
+                android:contentDescription="文档"
+                android:foreground="?android:attr/selectableItemBackgroundBorderless"
+                android:padding="9dp"
+                android:src="@drawable/ic_book"
+                android:tint="?attr/palette_on_secondary_container" />
+
+            <!-- 仅原生 zig 项目显示：编译 .so 并默认导出到系统下载目录 -->
+            <ImageButton
+                android:id="@+id/native_so_build"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/m3_icon_button_tonal"
+                android:contentDescription="编译 so 并导出到下载"
+                android:foreground="?android:attr/selectableItemBackgroundBorderless"
+                android:padding="9dp"
+                android:src="@drawable/ic_so"
+                android:tint="?attr/palette_on_secondary_container"
+                android:visibility="gone" />
         </LinearLayout>
 
         <TextView

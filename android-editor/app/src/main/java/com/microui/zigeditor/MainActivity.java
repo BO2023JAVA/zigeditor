@@ -19,6 +19,7 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.TextView;
@@ -66,10 +67,24 @@ public class MainActivity extends ThemedActivity {
     private static final int REQ_IMPORT_PROJECT = 9003;
     /** 备份 zip 在系统下载目录下的子目录 */
     private static final String BACKUP_SUBDIR = "backups";
+    /** 项目最后操作时间在 config.json 的 lastOpen 字段里存成可读格式。 */
+    private static final String OP_TIME_FMT = "yyyy-MM-dd HH:mm:ss";
 
     private File projectsRoot;
     private ProjectAdapter adapter;
+    private ListView list;
+    private TextView projStatus;
+    /** 下拉刷新的居中转圈：刷新期间显示，至少停留 600ms。 */
+    private ProgressBar projLoading;
+    private long loadingSince;
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    /** 下拉手势状态（与包管理页一致：只有松手且仍过阈值才刷新）。 */
+    private float pullStartY = -1;
+    private boolean pullActive;
+    private boolean pullArmed;
     private final List<File> projects = new ArrayList<>();
+    /** 项目最后操作时间（config.json 的 lastOpen，存可读时间），refresh() 时算一次用于排序与展示。 */
+    private final java.util.Map<String, Long> lastOpens = new java.util.HashMap<>();
     /** 列表展示用的派生数据，refresh() 时统一算一次，避免 getView 里反复读盘。 */
     private final java.util.Map<String, String> kindLabels = new java.util.HashMap<>();
     private final java.util.Map<String, Long> sizes = new java.util.HashMap<>();
@@ -93,12 +108,12 @@ public class MainActivity extends ThemedActivity {
             Toast.makeText(this, "无法创建目录：" + projectsRoot, Toast.LENGTH_LONG).show();
         }
 
-        TextView dirHint = findViewById(R.id.dir_hint);
-        dirHint.setText(projectsRoot.getAbsolutePath());
-
-        ListView list = findViewById(R.id.file_list);
+        list = findViewById(R.id.file_list);
+        projStatus = findViewById(R.id.proj_status);
+        projLoading = findViewById(R.id.proj_loading);
         adapter = new ProjectAdapter();
         list.setAdapter(adapter);
+        list.setOnTouchListener(pullToRefresh);
         list.setOnItemClickListener((parent, view, position, id) -> openProject(projects.get(position)));
         // 长按项目：编辑项目信息 / 删除项目
         list.setOnItemLongClickListener((parent, view, position, id) -> {
@@ -139,6 +154,72 @@ public class MainActivity extends ThemedActivity {
         refresh();
     }
 
+    /** 下拉刷新：列表在顶部时向下拖过阈值，松手才刷新（与包管理页同一套规则）。 */
+    private final View.OnTouchListener pullToRefresh = (v, e) -> {
+        switch (e.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                pullStartY = atListTop() ? e.getY() : -1;
+                pullArmed = false;
+                pullActive = false;
+                break;
+            case android.view.MotionEvent.ACTION_MOVE: {
+                if (pullStartY < 0) break;
+                float dy = e.getY() - pullStartY;
+                if (dy < 0) {
+                    // 手指回拉：本次下拉作废，交还列表滚动
+                    resetPull();
+                    break;
+                }
+                if (!pullActive && dy < dp(20)) break;
+                pullActive = true;
+                pullArmed = dy >= dp(72);
+                projStatus.setText(pullArmed ? "松开刷新" : "下拉刷新");
+                projStatus.setVisibility(View.VISIBLE);
+                break;
+            }
+            case android.view.MotionEvent.ACTION_UP: {
+                // 只有真正松手、且松手时仍超过阈值才刷新
+                boolean reload = pullStartY >= 0 && (e.getY() - pullStartY) >= dp(72);
+                resetPull();
+                if (reload) refreshWithSpinner();
+                break;
+            }
+            case android.view.MotionEvent.ACTION_CANCEL:
+                // 手势被系统取消（未真正松手）：只复位，不刷新
+                resetPull();
+                break;
+            default:
+                break;
+        }
+        return false;
+    };
+
+    private boolean atListTop() {
+        return list.getFirstVisiblePosition() == 0
+                && (list.getChildCount() == 0 || list.getChildAt(0).getTop() >= 0);
+    }
+
+    private void resetPull() {
+        pullActive = false;
+        pullArmed = false;
+        pullStartY = -1;
+        projStatus.setVisibility(View.GONE);
+    }
+
+    /** 下拉松手后刷新：显示居中转圈，刷新完成且至少停留 600ms 再收起。 */
+    private void refreshWithSpinner() {
+        loadingSince = System.currentTimeMillis();
+        projLoading.setVisibility(View.VISIBLE);
+        ui.postDelayed(() -> {
+            refresh();
+            final long since = loadingSince;
+            long delay = Math.max(0, 600 - (System.currentTimeMillis() - since));
+            ui.postDelayed(() -> {
+                if (loadingSince == since) projLoading.setVisibility(View.GONE);
+            }, delay);
+        }, 250);
+    }
+
     private void writeSample(File target) {
         if (target.exists()) return;
         try (FileOutputStream out = new FileOutputStream(target)) {
@@ -153,10 +234,16 @@ public class MainActivity extends ThemedActivity {
         kindLabels.clear();
         sizes.clear();
         icons.clear();
+        lastOpens.clear();
         File[] dirs = projectsRoot.listFiles(File::isDirectory);
         if (dirs != null) {
             projects.addAll(Arrays.asList(dirs));
-            projects.sort(Comparator.comparing((File f) -> f.getName().toLowerCase(java.util.Locale.ROOT)));
+            for (File d : projects) lastOpens.put(d.getName(), lastOpenedAt(d));
+            // 最近操作的项目排在前面；时间相同按名称排，保证顺序稳定
+            projects.sort((a, b) -> {
+                int c = Long.compare(lastOpens.get(b.getName()), lastOpens.get(a.getName()));
+                return c != 0 ? c : a.getName().compareToIgnoreCase(b.getName());
+            });
             for (File d : projects) {
                 // 类型 + 体积只算一次，列表滚动时直接用缓存
                 kindLabels.put(d.getName(), kindLabel(readMeta(d)[3]));
@@ -164,6 +251,66 @@ public class MainActivity extends ThemedActivity {
             }
         }
         adapter.notifyDataSetChanged();
+    }
+
+    /** 项目最后操作时间：优先 config.json 的 lastOpen，旧记录/缺失时退回文件修改时间。 */
+    private long lastOpenedAt(File dir) {
+        String v = readMeta(dir)[6];
+        if (v != null && !v.isEmpty()) {
+            try {
+                // 旧版本存的是毫秒时间戳，新版本存 "yyyy-MM-dd HH:mm:ss"
+                if (v.matches("\\d+")) return Long.parseLong(v);
+                Date t = new SimpleDateFormat(OP_TIME_FMT, Locale.US).parse(v);
+                if (t != null) return t.getTime();
+            } catch (Exception ignored) { }
+        }
+        File cfg = new File(dir, CONFIG_NAME);
+        if (!cfg.isFile()) cfg = new File(dir, CONFIG_OLD);
+        return (cfg.isFile() ? cfg : dir).lastModified();
+    }
+
+    /** 记录项目最后操作时间（写进 config.json），项目列表按它倒序排列。 */
+    private void touchProject(File dir) {
+        try {
+            File f = new File(dir, CONFIG_NAME);
+            if (!f.isFile()) f = new File(dir, CONFIG_OLD);
+            org.json.JSONObject o = new org.json.JSONObject();
+            if (f.isFile()) {
+                o = new org.json.JSONObject(new String(
+                        java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+            }
+            o.put("lastOpen", new SimpleDateFormat(OP_TIME_FMT, Locale.US).format(new Date()));
+            o.remove("lastOpenedAt"); // 清掉旧字段名
+            try (FileOutputStream out = new FileOutputStream(new File(dir, CONFIG_NAME))) {
+                out.write(o.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            File old = new File(dir, CONFIG_OLD);
+            if (old.isFile()) old.delete();
+        } catch (Exception ignored) { }
+    }
+
+    /** 最后操作时间文案：刚刚 / N 分钟前 / 今天 HH:mm / 昨天 HH:mm / M月d日 HH:mm / yyyy-MM-dd。 */
+    private static String fmtLastOpened(long t) {
+        if (t <= 0) return "";
+        long diff = System.currentTimeMillis() - t;
+        if (diff < 60_000) return "刚刚";
+        if (diff < 3_600_000) return (diff / 60_000) + " 分钟前";
+        SimpleDateFormat hm = new SimpleDateFormat("HH:mm", Locale.US);
+        java.util.Calendar today = java.util.Calendar.getInstance();
+        java.util.Calendar at = java.util.Calendar.getInstance();
+        at.setTimeInMillis(t);
+        if (today.get(java.util.Calendar.YEAR) == at.get(java.util.Calendar.YEAR)
+                && today.get(java.util.Calendar.DAY_OF_YEAR) == at.get(java.util.Calendar.DAY_OF_YEAR)) {
+            return "今天 " + hm.format(new Date(t));
+        }
+        today.add(java.util.Calendar.DAY_OF_YEAR, -1);
+        if (today.get(java.util.Calendar.YEAR) == at.get(java.util.Calendar.YEAR)
+                && today.get(java.util.Calendar.DAY_OF_YEAR) == at.get(java.util.Calendar.DAY_OF_YEAR)) {
+            return "昨天 " + hm.format(new Date(t));
+        }
+        if (today.get(java.util.Calendar.YEAR) == at.get(java.util.Calendar.YEAR))
+            return new SimpleDateFormat("M月d日 HH:mm", Locale.CHINA).format(new Date(t));
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(t));
     }
 
     /** 项目列表：图标 + 名称 + 大小；点图标可直接换图标，点整行进编辑器。 */
@@ -216,8 +363,10 @@ public class MainActivity extends ThemedActivity {
             h.name.setText(dir.getName());
             String kind = kindLabels.get(dir.getName());
             Long bytes = sizes.get(dir.getName());
+            Long opAt = lastOpens.get(dir.getName());
             h.size.setText((kind == null ? "图形界面" : kind) + " · "
-                    + fmtSize(bytes == null ? 0 : bytes));
+                    + fmtSize(bytes == null ? 0 : bytes)
+                    + (opAt == null ? "" : " · " + fmtLastOpened(opAt)));
             Bitmap bmp = iconFor(dir);
             if (bmp != null) h.icon.setImageBitmap(bmp);
             else h.icon.setImageResource(android.R.drawable.sym_def_app_icon);
@@ -339,6 +488,7 @@ public class MainActivity extends ThemedActivity {
     }
 
     private void openProject(File dir) {
+        touchProject(dir); // 记录最后操作时间，返回列表时会按它重新排序
         Intent intent = new Intent(this, EditorActivity.class);
         // 打开项目时按 config.json 的 zigVersion 自动切换工具链
         com.microui.toolchain.ProotRunner.useZigForProject(this, dir);
@@ -407,6 +557,8 @@ public class MainActivity extends ThemedActivity {
         zigGroup.setOrientation(RadioGroup.HORIZONTAL);
         java.util.Map<Integer, String> zigIdToVersion = new java.util.HashMap<>();
         String curZig = com.microui.toolchain.ProotRunner.zigCurrentVersion(this);
+        // 图形界面/纯终端默认使用已下载的最新版（installedZigVersions 已按版本从新到旧排序）
+        final String latestInstalled = zigInstalled.isEmpty() ? "" : zigInstalled.get(0);
         final int[] lastInstalledId = {-1};
         for (String v : zigOptions) {
             RadioButton rb = new RadioButton(this);
@@ -419,7 +571,8 @@ public class MainActivity extends ThemedActivity {
             }
             zigGroup.addView(rb);
             zigIdToVersion.put(rb.getId(), v);
-            if (v.equals(curZig) || (lastInstalledId[0] == -1 && inst && curZig.isEmpty())) {
+            if (v.equals(latestInstalled)
+                    || (latestInstalled.isEmpty() && v.equals(curZig))) {
                 rb.setChecked(true);
                 lastInstalledId[0] = rb.getId();
             }
@@ -438,13 +591,22 @@ public class MainActivity extends ThemedActivity {
                         com.microui.zigeditor.terminal.PackagesActivity.class));
             }
         });
-        // 原生 zig 的 zig init 在 0.17.x 会崩溃，选原生类型时自动挑已安装的 0.16
+        // 原生 zig 的 zig init 在 0.17.x 会崩溃，选原生类型时自动挑已安装的 0.16；
+        // 切回图形界面/纯终端时恢复默认的已下载最新版
         kindGroup.setOnCheckedChangeListener((g, checkedId) -> {
-            if (checkedId != nativeRadio.getId()) return;
-            for (java.util.Map.Entry<Integer, String> e : zigIdToVersion.entrySet()) {
-                if (e.getValue().startsWith("0.16") && zigInstalled.contains(e.getValue())) {
-                    zigGroup.check(e.getKey());
-                    break;
+            if (checkedId == nativeRadio.getId()) {
+                for (java.util.Map.Entry<Integer, String> e : zigIdToVersion.entrySet()) {
+                    if (e.getValue().startsWith("0.16") && zigInstalled.contains(e.getValue())) {
+                        zigGroup.check(e.getKey());
+                        break;
+                    }
+                }
+            } else if (!latestInstalled.isEmpty()) {
+                for (java.util.Map.Entry<Integer, String> e : zigIdToVersion.entrySet()) {
+                    if (e.getValue().equals(latestInstalled)) {
+                        zigGroup.check(e.getKey());
+                        break;
+                    }
                 }
             }
         });
@@ -565,8 +727,13 @@ public class MainActivity extends ThemedActivity {
         // 项目名与应用名统一，config.json 里的 appName 就是项目名
         if (!isNative && !copyTemplate(dir, nameText, kind))
             writeSample(new File(dir, "main.zig"));
-        if (!copyChosenIcon(dir)) copyDefaultIcon(dir);
-        writeMeta(dir, nameText, p, DEFAULT_ICON_FILE, kind, ver, zigVer);
+        // 图标只服务于 APK 打包/列表缩略图：
+        // 原生 zig 项目产物是 .so，不参与 APK 打包，用户没选图标就不生成 icon.png
+        boolean hasIcon = copyChosenIcon(dir);
+        if (!hasIcon && !isNative) copyDefaultIcon(dir);
+        writeMeta(dir, nameText, p, hasIcon || !isNative ? DEFAULT_ICON_FILE : null,
+                kind, ver, zigVer);
+        touchProject(dir);
         pendingNewIconUri = null;
         newIconPreview = null;
         refresh();
@@ -868,6 +1035,7 @@ public class MainActivity extends ThemedActivity {
             }
             final String err = error;
             runOnUiThread(() -> {
+                if (err == null) touchProject(target);
                 refresh();
                 Toast.makeText(MainActivity.this,
                         err != null ? "导入失败：" + err
@@ -992,26 +1160,31 @@ public class MainActivity extends ThemedActivity {
                     String kind = meta[3] != null ? meta[3] : "gui";
                     // Zig 版本以 config.json 为准，编辑页不再提供修改；项目名即应用名
                     writeMeta(target, nameText, p, readMeta(target)[2], kind, ver, meta[5]);
+                    touchProject(target);
                     refresh();
                 })
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    /** 读项目配置：[0]=包名，[1]=应用名，[2]=图标文件名，[3]=项目类型，[4]=应用版本号，[5]=Zig 版本（缺失为 null）。优先 config.json，兼容旧 microui.json。 */
+    /** 读项目配置：[0]=包名，[1]=应用名，[2]=图标文件名，[3]=项目类型，[4]=应用版本号，[5]=Zig 版本，[6]=最后操作时间（缺失为 null）。优先 config.json，兼容旧 microui.json。 */
     private String[] readMeta(File dir) {
         File f = new File(dir, CONFIG_NAME);
         if (!f.isFile()) f = new File(dir, CONFIG_OLD);
-        if (!f.isFile()) return new String[]{null, null, null, null, null, null};
+        if (!f.isFile()) return new String[]{null, null, null, null, null, null, null};
         try {
             String s = new String(java.nio.file.Files.readAllBytes(f.toPath()),
                     StandardCharsets.UTF_8);
             org.json.JSONObject o = new org.json.JSONObject(s);
+            String lastOpen = o.optString("lastOpen", null);
+            if (lastOpen == null || lastOpen.isEmpty())
+                lastOpen = o.optString("lastOpenedAt", null); // 兼容旧字段名
             return new String[]{o.optString("package", null), o.optString("appName", null),
                     o.optString("icon", null), o.optString("kind", null),
-                    o.optString("versionName", null), o.optString("zigVersion", null)};
+                    o.optString("versionName", null), o.optString("zigVersion", null),
+                    lastOpen};
         } catch (Exception e) {
-            return new String[]{null, null, null, null, null, null};
+            return new String[]{null, null, null, null, null, null, null};
         }
     }
 
@@ -1107,6 +1280,7 @@ public class MainActivity extends ThemedActivity {
             return;
         }
         updateIconInConfig(dir);
+        touchProject(dir);
         refresh();
         Toast.makeText(this, "图标已更新，重新编译安装后生效", Toast.LENGTH_LONG).show();
     }
@@ -1139,10 +1313,11 @@ public class MainActivity extends ThemedActivity {
     }
 
     /** 复制 APK 内置模板到新项目：
-     *  图形界面 → bundled/template-gui（core/ 必要件 + ui/ 可选 UI 库 + 字体）；
-     *  纯终端   → bundled/template-console（只有 core/main.zig 入口）。 */
+     *  图形界面 → bundled/template-gui（含 core/、ui/ 全部框架源码，字体在 core/font.ttf）；
+     *  纯终端   → bundled/template-console（只有 core/entry.zig 入口）。 */
     private boolean copyTemplate(File dir, String title, String kind) {
-        String asset = "bundled/template-" + kind;
+        String asset = "console".equals(kind) ? "bundled/template-console"
+                : "bundled/template-gui";
         try {
             copyAssetDir(asset, dir, title);
             return true;

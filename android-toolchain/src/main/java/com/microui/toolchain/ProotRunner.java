@@ -240,25 +240,67 @@ public final class ProotRunner {
      * 初始任务直接由 bash -c 执行，避免内部命令被 PTY 回显；结束后进入正常交互终端。
      */
     public static ProcessBuilder terminal(Context c, String projectPath, String runCommand,
-                                          String successMarker) throws IOException {
+                                          String successMarker, int columns, int rows) throws IOException {
         File zigProjects = new File(c.getFilesDir(), "zig");
         zigProjects.mkdirs();
+        // proot 的绑定目标必须已存在，否则静默忽略：先在 rootfs 里建好 ~/projects 挂载点
+        new File(new File(rootfs(c), "root"), "projects").mkdirs();
+        writeInteractiveRc(c);
         List<String> binds = new ArrayList<>();
-        binds.add(zigProjects.getAbsolutePath() + ":/projects");
+        // 项目放在 ~/projects 下（~ 即 /root），与桌面 Linux 的习惯一致
+        binds.add(zigProjects.getAbsolutePath() + ":/root/projects");
         java.util.Map<String, String> env = new java.util.HashMap<>();
         env.put("PS1", "root@ubuntu:\\w# ");
-        String startup = "umask 022; chmod -R a+rwX /projects 2>/dev/null; "
+        // 与 Termux 一致的 ls 配色：目录蓝紫、可执行绿色。
+        // 项目目录是 777（方便 App 与终端互写），这里把 ow/tw 拉回普通目录色，避免绿色底块
+        env.put("LS_COLORS", "di=01;34:ln=01;36:pi=40;33:so=01;35:do=01;35:bd=40;33;01"
+                + ":cd=40;33;01:or=40;31;01:mi=05;37;41:su=37;41:sg=30;43:ca=30;41"
+                + ":tw=01;34:ow=01;34:st=01;34:ex=01;32"
+                + ":*.tar=01;31:*.tgz=01;31:*.zip=01;31:*.gz=01;31:*.xz=01;31:*.bz2=01;31"
+                + ":*.jpg=01;35:*.jpeg=01;35:*.png=01;35:*.gif=01;35:*.md=01;33");
+        String startup = "umask 022; mkdir -p /root/projects; chmod -R a+rwX /root/projects 2>/dev/null; "
+                // proot 下 pty 的行列数常常是 0，zig 会因此不绘制编译进度；这里按界面实际尺寸补一次
+                + "if [ -t 0 ] && [ -n \"$4\" ] && [ -n \"$5\" ]; then stty rows \"$5\" cols \"$4\" 2>/dev/null; fi; "
                 + "__zigeditor_rc=0; "
                 + "if [ -n \"$1\" ]; then cd \"$1\" || __zigeditor_rc=$?; fi; "
                 + "if [ -n \"$2\" ]; then "
                 + "if [ \"$__zigeditor_rc\" -eq 0 ]; then ( eval \"$2\" ); __zigeditor_rc=$?; fi; "
+                // su 模式下 zig init / zig build 生成的文件属 root，补一次写权限，否则 App 保存会 Permission denied
+                + "if [ -n \"$1\" ]; then chmod -R a+rwX \"$1\" 2>/dev/null; fi; "
                 + "if [ \"$__zigeditor_rc\" -ne 0 ]; then printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; "
                 + "elif [ -n \"$3\" ]; then printf '\\n%s\\n' \"$3\"; fi; "
                 + "elif [ \"$__zigeditor_rc\" -ne 0 ]; then printf '[失败] 无法进入项目目录\\n'; fi; "
-                + "export PS1='root@ubuntu:\\w# '; exec /bin/bash --norc -i";
+                + "export PS1='root@ubuntu:\\w# '; "
+                + "exec /bin/bash --rcfile /root/.zigeditor_bashrc -i";
         return base(c, binds, Arrays.asList("/bin/bash", "--norc", "-c", startup, "zigeditor",
                 projectPath == null ? "" : projectPath, runCommand == null ? "" : runCommand,
-                successMarker == null ? "" : successMarker), env);
+                successMarker == null ? "" : successMarker,
+                columns > 0 ? String.valueOf(columns) : "",
+                rows > 0 ? String.valueOf(rows) : ""), env);
+    }
+
+    /**
+     * 交互 shell 的 rc 文件（Termux 风格）：提示符 + ls 彩色输出。
+     * 目录为高亮蓝紫、可执行文件为高亮绿、链接为青色，与 Termux 的默认观感一致。
+     */
+    private static void writeInteractiveRc(Context c) throws IOException {
+        String content = "PS1='root@ubuntu:\\w# '\n"
+                + "alias ls='ls --color=auto'\n"
+                + "alias ll='ls -l --color=auto'\n"
+                + "alias la='ls -A --color=auto'\n"
+                + "alias grep='grep --color=auto'\n";
+        File rc = new File(new File(rootfs(c), "root"), ".zigeditor_bashrc");
+        try {
+            if (rc.isFile()) {
+                String old = new String(Files.readAllBytes(rc.toPath()), StandardCharsets.UTF_8);
+                if (old.equals(content)) return;
+            }
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(rc)) {
+                out.write(content.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (IOException e) {
+            // rc 写不进去时终端仍可用，只是没有彩色 ls
+        }
     }
 
     /**
@@ -316,6 +358,15 @@ public final class ProotRunner {
      * 因此在 Android bionic 上也能直接 dlopen），产物落在项目 zig-out/ 下。
      */
     public static ProcessBuilder buildNativeLib(Context c, File srcDir, File outFile) throws IOException {
+        return buildNativeLib(c, srcDir, outFile, null);
+    }
+
+    /**
+     * 同上，但允许用编辑页「编译设置」里的自定义命令（在容器内以 /work 为项目目录执行）。
+     * customCommand 为空时用默认命令。
+     */
+    public static ProcessBuilder buildNativeLib(Context c, File srcDir, File outFile,
+                                                String customCommand) throws IOException {
         // proot 绑定要求宿主目录已存在，否则 "can't sanitize binding" 并静默忽略
         srcDir.mkdirs();
         File outDir = outFile.getParentFile();
@@ -324,13 +375,45 @@ public final class ProotRunner {
         List<String> binds = new ArrayList<>();
         binds.add(srcDir.getAbsolutePath() + ":/work");
 
+        String zigCmd = customCommand != null && !customCommand.trim().isEmpty()
+                ? customCommand.trim() : defaultNativeLibCommand(outFile.getName());
         String cmd = "umask 022; set -e; cd /work; mkdir -p /tmp/zc /tmp/zgc; "
-                + "/opt/zig/zig build-lib -dynamic -fstrip -O ReleaseSmall -target aarch64-linux-musl "
-                + "\"-femit-bin=/work/zig-out/" + outFile.getName() + "\" src/root.zig "
-                + "--cache-dir /tmp/zc --global-cache-dir /tmp/zgc; "
+                + "export PATH=/opt/zig:$PATH; "
+                + zigCmd + "; "
                 // su 模式下产物属 root，放开读权限，否则 app 进程导出时 AccessDeniedException
-                + "chmod 0644 \"/work/zig-out/" + outFile.getName() + "\"";
+                // 用通配符：产物名可能与预期不同（项目改名 / 自定义命令）
+                + "chmod 0644 zig-out/*.so 2>/dev/null || true";
         return base(c, binds, Arrays.asList("/bin/bash", "-c", cmd));
+    }
+
+    /** 原生项目默认的 .so 编译命令（容器内 cwd=/work，输出到 zig-out/<outName>）。 */
+    public static String defaultNativeLibCommand(String outName) {
+        return "zig build-lib -dynamic -fstrip -O ReleaseSmall -target aarch64-linux-musl "
+                + "-femit-bin=zig-out/" + outName + " src/root.zig "
+                + "--cache-dir /tmp/zc --global-cache-dir /tmp/zgc";
+    }
+
+    /**
+     * 项目的 zig 包名：优先用 build.zig.zon 里的 .name（zig init 创建时生成，
+     * 外层文件夹改名不影响它），读不到时才退回当前文件夹名。
+     */
+    public static String projectZigName(File dir) {
+        String fallback = dir.getName().replaceAll("[^A-Za-z0-9_]", "_");
+        File zon = new File(dir, "build.zig.zon");
+        if (!zon.isFile()) return fallback;
+        try {
+            String s = new String(java.nio.file.Files.readAllBytes(zon.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            // 兼容 .name = .demo（0.16 枚举写法）与 .name = "demo"（旧版字符串写法）
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\.name\\s*=\\s*(?:\\.([A-Za-z0-9_]+)|\"([^\"]+)\")").matcher(s);
+            if (m.find()) {
+                String n = m.group(1) != null ? m.group(1) : m.group(2);
+                return n.replaceAll("[^A-Za-z0-9_]", "_");
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
     }
 
     /** 设备是否有 su：模拟器开了 ROOT / 已 root 真机时，可用 root 域执行 proot 绕过 untrusted_app 的 ptrace 限制。 */
@@ -391,13 +474,13 @@ public final class ProotRunner {
                 {"PROOT_TMP_DIR", new File(microuiRoot(c), "proot-tmp").getAbsolutePath()},
                 {"LD_LIBRARY_PATH", nativeDir(c).getAbsolutePath()},
                 {"PROOT_NO_SECCOMP", "1"},
-                {"HOME", r.getAbsolutePath() + "/root"},
+                {"HOME", "/root"},
                 {"PATH", "/opt/zig:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
                 {"TERM", "xterm-256color"},
                 // 空 PS1：命令提示符由 App 侧打印，避免 shell 再输出一遍
                 {"PS1", ""},
                 {"LANG", "C.UTF-8"},
-                {"TMPDIR", r.getAbsolutePath() + "/tmp"},
+                {"TMPDIR", "/tmp"},
         };
 
         Map<String, String> effectiveEnv = new java.util.LinkedHashMap<>();

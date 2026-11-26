@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- .so 文件图标：大写字母 S + O（用于侧滑栏「编译 so」入口） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- S：与 O 同高的大写字母 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9.7,8.4C9.1,7.6 8.1,7.2 7.2,7.4C6,7.6 5.1,8.5 5.1,9.7C5.1,10.9 6.2,11.5 7.4,11.8C8.7,12.1 9.8,12.7 9.8,14C9.8,15.4 8.7,16.5 7.3,16.5C6.2,16.5 5.3,16.1 4.8,15.4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.9" />
+    <!-- O：外径 9.1、壁厚 1.9 的圆环 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M15.1,7.35a4.55,4.55 0 1,0 0,9.1a4.55,4.55 0 1,0 0,-9.1zM15.1,9.25a2.65,2.65 0 1,1 0,5.3a2.65,2.65 0 1,1 0,-5.3z" />
+</vector>

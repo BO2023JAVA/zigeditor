@@ -1,4 +1,4 @@
-//! 纯终端 APK 的安卓入口。
+//! 纯终端 APK 的安卓入口（固定文件，一般不用改）。
 //!
 //! Java 壳 org.libsdl.app.ConsoleActivity 启动时把 stdout/stderr 重定向到界面，
 //! 然后通过 JNI 调用下面的函数；业务代码 app.main() 里的 print 就会显示出来。

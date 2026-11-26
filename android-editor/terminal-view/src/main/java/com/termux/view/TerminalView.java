@@ -1048,6 +1048,18 @@ public final class TerminalView extends View {
         return mTermSession;
     }
 
+    /** 按当前视图宽度与字号算出的列数；未完成布局或字号未知时返回 0。 */
+    public int getViewColumns() {
+        if (getWidth() <= 0 || mRenderer.mFontWidth <= 0) return 0;
+        return Math.max(4, (int) (getWidth() / mRenderer.mFontWidth));
+    }
+
+    /** 按当前视图高度与字号算出的行数；未完成布局或字号未知时返回 0。 */
+    public int getViewRows() {
+        if (getHeight() <= 0 || mRenderer.mFontLineSpacing <= 0) return 0;
+        return Math.max(4, (getHeight() - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
+    }
+
     private CharSequence getText() {
         return mEmulator.getScreen().getSelectedText(0, mTopRow, mEmulator.mColumns, mTopRow + mEmulator.mRows);
     }
