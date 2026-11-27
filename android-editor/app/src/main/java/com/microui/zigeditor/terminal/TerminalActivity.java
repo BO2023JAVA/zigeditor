@@ -194,7 +194,11 @@ public class TerminalActivity extends ThemedActivity {
         autoCompileDir = null;
         pendingOutput.clear();
         pendingOutputChars = 0;
-        if (session != null) session.finishIfRunning();
+        // 只把页面摘下来，不杀进程：正在跑的 zig 编译继续完成，下次进来直接接回同一个会话
+        if (session != null) {
+            if (session.isRunning()) TerminalSessions.detach(session);
+            else TerminalSessions.close();
+        }
         if (installReceiver != null) {
             try { unregisterReceiver(installReceiver); } catch (IllegalArgumentException ignored) { }
         }
@@ -369,6 +373,24 @@ public class TerminalActivity extends ThemedActivity {
         if (session != null && session.isRunning()) return;
         emulatorReady = false;
         try {
+            // 返回编辑页不再杀终端：同一项目的会话还活着就接回来，编译可以继续跑完
+            TerminalSession existing = TerminalSessions.get(initialProjectPath);
+            if (existing != null) {
+                session = existing;
+                session.updateTerminalSessionClient(sessionClient);
+                screen.attachSession(session);
+                String cmd = initialRunCommand;
+                initialProjectPath = null;
+                initialRunCommand = null;
+                // 复用的是旧会话，初始化命令早已执行过，不要再拿旧的标记自动跳编辑页
+                openEditorAfterRun = false;
+                if (cmd != null) {
+                    if (isShellIdle()) session.write(cmd + "\r");
+                    else android.widget.Toast.makeText(this, "上一次命令还在执行，等它结束再点运行",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                }
+                return;
+            }
             ProcessBuilder pb;
             if (!ProotRunner.abiSupportHint(this).isEmpty()) {
                 hostShell = true;
@@ -388,6 +410,7 @@ public class TerminalActivity extends ThemedActivity {
                 }
             }
             session = createSession(pb);
+            TerminalSessions.put(initialProjectPath, session);
             screen.attachSession(session);
             initialProjectPath = null;
             initialRunCommand = null;
@@ -510,6 +533,20 @@ public class TerminalActivity extends ThemedActivity {
             return;
         }
         if (emulatorReady) session.write(text);
+    }
+
+    /** 复用的会话是否空闲：最后一行是提示符才认为上一条命令已经结束。 */
+    private boolean isShellIdle() {
+        if (session == null || !session.isRunning() || session.getEmulator() == null) return false;
+        String text = session.getEmulator().getScreen().getTranscriptText();
+        if (text == null) return false;
+        String[] lines = text.split("\n");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            String line = lines[i].trim();
+            if (line.isEmpty()) continue;
+            return line.matches("root@ubuntu:.*[#$]") || line.matches("host:~\\$");
+        }
+        return false;
     }
 
     private void showKeyboard() {
