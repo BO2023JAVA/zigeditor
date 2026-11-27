@@ -244,7 +244,19 @@ public final class ProotRunner {
         File zigProjects = new File(c.getFilesDir(), "zig");
         zigProjects.mkdirs();
         // proot 的绑定目标必须已存在，否则静默忽略：先在 rootfs 里建好 ~/projects 挂载点
-        new File(new File(rootfs(c), "root"), "projects").mkdirs();
+        File rootHome = new File(rootfs(c), "root");
+        rootHome.mkdirs();
+        new File(rootHome, "projects").mkdirs();
+        // Ubuntu 的 /etc/bash.bashrc 会用 $(groups) 判断 sudo 权限，而 Android 的补充组 ID
+        // 在 Ubuntu 里没有对应名字，每开一次终端都会刷 "groups: cannot find name for group ID ..."。
+        // .hushlogin 会让那段检查直接跳过（没有 sudo，提示本来也用不上）。
+        File hushlogin = new File(rootHome, ".hushlogin");
+        if (!hushlogin.exists()) {
+            try {
+                hushlogin.createNewFile();
+            } catch (IOException ignored) {
+            }
+        }
         writeInteractiveRc(c);
         List<String> binds = new ArrayList<>();
         // 项目放在 ~/projects 下（~ 即 /root），与桌面 Linux 的习惯一致
