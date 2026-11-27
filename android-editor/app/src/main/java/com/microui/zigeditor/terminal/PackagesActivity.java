@@ -738,7 +738,7 @@ public class PackagesActivity extends ThemedActivity {
                     int total = open + closed;
                     if (total <= 0) return;
                     zigDevPct = Math.round(closed * 100f / total);
-                    zigDevText = "0.18.0 里程碑进度 " + zigDevPct + "%";
+                    zigDevText = "0.18.0 里程碑 " + closed + "/" + total + "（" + zigDevPct + "%）";
                     runOnUiThread(() -> {
                         if (!isFinishing() && !isDestroyed()) adapter.notifyDataSetChanged();
                     });
@@ -961,6 +961,11 @@ public class PackagesActivity extends ThemedActivity {
     private void startInstall(final Pkg p) {
         if (p.url.isEmpty() && p.urls.isEmpty()) {
             Toast.makeText(this, "该包没有下载地址，请用「本地导入」", Toast.LENGTH_LONG).show();
+            return;
+        }
+        PackageJobs.Job running = jobs.job(p.id);
+        if (running != null && running.isActive()) {
+            Toast.makeText(this, "该包已在安装队列中", Toast.LENGTH_SHORT).show();
             return;
         }
         List<Pkg> chain = chainFor(p);

@@ -270,15 +270,17 @@ public final class ProotRunner {
                 + ":tw=01;34:ow=01;34:st=01;34:ex=01;32"
                 + ":*.tar=01;31:*.tgz=01;31:*.zip=01;31:*.gz=01;31:*.xz=01;31:*.bz2=01;31"
                 + ":*.jpg=01;35:*.jpeg=01;35:*.png=01;35:*.gif=01;35:*.md=01;33");
-        String startup = "umask 022; mkdir -p /root/projects; chmod -R a+rwX /root/projects 2>/dev/null; "
+        String startup = "umask 022; mkdir -p /root/projects; "
                 // proot 下 pty 的行列数常常是 0，zig 会因此不绘制编译进度；这里按界面实际尺寸补一次
                 + "if [ -t 0 ] && [ -n \"$4\" ] && [ -n \"$5\" ]; then stty rows \"$5\" cols \"$4\" 2>/dev/null; fi; "
                 + "__zigeditor_rc=0; "
                 + "if [ -n \"$1\" ]; then cd \"$1\" || __zigeditor_rc=$?; fi; "
                 + "if [ -n \"$2\" ]; then "
                 + "if [ \"$__zigeditor_rc\" -eq 0 ]; then ( eval \"$2\" ); __zigeditor_rc=$?; fi; "
-                // su 模式下 zig init / zig build 生成的文件属 root，补一次写权限，否则 App 保存会 Permission denied
-                + "if [ -n \"$1\" ]; then chmod -R a+rwX \"$1\" 2>/dev/null; fi; "
+                // su 模式下 zig init / zig build 生成的文件属 root，补一次写权限，否则 App 保存会 Permission denied；
+                // 跳过 .zig-cache / zig-out，否则每次编译后都要遍历上万个缓存文件，手机上会明显变卡
+                + "if [ -n \"$1\" ]; then find \"$1\" -maxdepth 4 \\( -name .zig-cache -o -name zig-out \\) -prune"
+                + " -o -exec chmod a+rwX {} + 2>/dev/null; fi; "
                 + "if [ \"$__zigeditor_rc\" -ne 0 ]; then printf '\\n[失败] 退出码 %s\\n' \"$__zigeditor_rc\"; "
                 + "elif [ -n \"$3\" ]; then printf '\\n%s\\n' \"$3\"; fi; "
                 + "elif [ \"$__zigeditor_rc\" -ne 0 ]; then printf '[失败] 无法进入项目目录\\n'; fi; "

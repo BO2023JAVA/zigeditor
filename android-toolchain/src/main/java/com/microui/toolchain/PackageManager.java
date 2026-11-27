@@ -698,9 +698,24 @@ public final class PackageManager {
             if (p.mode.equals(Pkg.MODE_UNPACK)) collapseSingleRoot(work);
             // 原子替换：先删旧目录，再 rename
             deleteRecursive(target);
-            if (!work.renameTo(target))
-                throw new PkgException(PkgException.Stage.PERMISSION,
-                        "无法安装到 " + target + "（可能目录被占用或存储只读）");
+            if (!work.renameTo(target)) {
+                // 少数机型/场景 rename 会失败（旧目录残留只读子目录、目录被占用、跨挂载点等），
+                // 退化为直接解包到目标目录，保证安装仍能完成
+                deleteRecursive(work);
+                deleteRecursive(target);
+                if (!target.mkdirs() && !target.isDirectory())
+                    throw new PkgException(PkgException.Stage.PERMISSION,
+                            "无法创建安装目录 " + target + "（存储只读或空间不足）");
+                try {
+                    r = ArchiveExtractor.extract(archive, p.format, target, symlinker, extractL);
+                } catch (IOException e) {
+                    deleteRecursive(target);
+                    throw new PkgException(PkgException.Stage.EXTRACT,
+                            "解包到 " + target + " 失败：" + e.getMessage()
+                                    + "（常见原因：磁盘写满、包不完整、格式与 manifest 不符）", e);
+                }
+                if (p.mode.equals(Pkg.MODE_UNPACK)) collapseSingleRoot(target);
+            }
             writeState(p, target, r);
         } finally {
             deleteRecursive(work);
@@ -876,6 +891,9 @@ public final class PackageManager {
 
     public static void deleteRecursive(File f) {
         if (f == null || !f.exists()) return;
+        // 解包出来的目录可能带只读权限（0555），父目录没有写权限时子项删不掉，
+        // 会导致后续 rename 安装失败；删除前先补上属主写权限
+        if (f.isDirectory() && !f.canWrite()) f.setWritable(true, true);
         File[] kids = f.listFiles();
         if (kids != null) for (File k : kids) deleteRecursive(k);
         f.delete();

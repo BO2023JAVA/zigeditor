@@ -128,7 +128,18 @@ public final class PackageJobs {
      */
     public void installChain(List<Pkg> chain, String baseUrl, DownloadConfig cfg) {
         if (chain.isEmpty()) return;
-        List<Pkg> todo = new ArrayList<>(chain);
+        // 已在队列/进行中的包不重复入队：否则会覆盖原任务（进度归零），
+        // 界面上还会出现同一个包两条“排队中”的状态
+        List<Pkg> todo = new ArrayList<>();
+        for (Pkg p : chain) {
+            Job existed = job(p.id);
+            if (existed != null && existed.isActive()) continue;
+            todo.add(p);
+        }
+        if (todo.isEmpty()) {
+            fire();
+            return;
+        }
         String chainId = "c" + System.currentTimeMillis() + "-" + todo.get(0).id;
         for (Pkg p : todo) {
             Job j;
